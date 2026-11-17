@@ -1,67 +1,76 @@
-// input.js — keyboard + mouse input. WASD moves, mouse orbits the camera
-// (pointer lock on click, drag as a fallback), E enters/exits cars, click
-// shoots, M starts the next mission, P/Esc pauses, R reloads is not needed
-// (infinite ammo), Shift runs, Space jumps.
-import { G } from './state.js';
+// input.js — keyboard + mouse state. Tracks held keys, edge-triggered
+// presses (E, N, Esc...), and mouse drag for the orbit camera.
+export class Input {
+  constructor() {
+    this.keys = new Set();
+    this.pressed = new Set();
+    this.mouseDX = 0;
+    this.mouseDY = 0;
+    this.mouseDown = false;
+    this.clicked = false;
+    this.clickX = 0;
+    this.clickY = 0;
+    this.dragging = false;
+    this.onFirstGesture = null;
+    this.gestureSeen = false;
+    window.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      this.keys.add(e.code);
+      this.pressed.add(e.code);
+      this.gesture();
+      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
+    });
+    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+    window.addEventListener('blur', () => this.keys.clear());
+    window.addEventListener('mousedown', (e) => {
+      // Only canvas clicks drive the game: clicks on menus/buttons must
+      // never fire the pistol (the HUD itself is pointer-events:none).
+      if (e.target.id !== 'game-canvas') return;
+      this.mouseDown = true;
+      this.dragging = true;
+      this.clicked = true;
+      this.clickX = e.clientX;
+      this.clickY = e.clientY;
+      this.gesture();
+    });
+    window.addEventListener('mouseup', () => { this.mouseDown = false; this.dragging = false; });
+    window.addEventListener('mousemove', (e) => {
+      if (this.dragging) {
+        this.mouseDX += e.movementX || 0;
+        this.mouseDY += e.movementY || 0;
+      }
+    });
+    window.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
 
-export function initInput(canvas, callbacks) {
-  const keys = G.keys;
-
-  window.addEventListener('keydown', (e) => {
-    if (e.repeat) return;
-    keys[e.code] = true;
-    if (e.code === 'KeyM' && callbacks.onMissionKey) callbacks.onMissionKey();
-    if ((e.code === 'KeyP' || e.code === 'Escape') && callbacks.onPauseKey) callbacks.onPauseKey();
-    if (e.code === 'KeyE' && callbacks.onInteractKey) callbacks.onInteractKey();
-    if (e.code === 'KeyF' && callbacks.onInteractKey) callbacks.onInteractKey();
-    if (e.code === 'Space') e.preventDefault();
-  });
-  window.addEventListener('keyup', (e) => { keys[e.code] = false; });
-
-  canvas.addEventListener('click', () => {
-    if (G.started && !G.paused && !G.pointerLocked && canvas.requestPointerLock) {
-      try { canvas.requestPointerLock(); } catch (err) { /* pointer lock unavailable */ }
+  gesture() {
+    if (!this.gestureSeen) {
+      this.gestureSeen = true;
+      if (this.onFirstGesture) this.onFirstGesture();
     }
-  });
-  document.addEventListener('pointerlockchange', () => {
-    G.pointerLocked = document.pointerLockElement === canvas;
-  });
-  document.addEventListener('mousemove', (e) => {
-    if (G.pointerLocked) {
-      G.mouseDX += e.movementX || 0;
-      G.mouseDY += e.movementY || 0;
-    } else if (e.buttons === 1 && G.started && !G.paused) {
-      G.mouseDX += e.movementX || 0;
-      G.mouseDY += e.movementY || 0;
-    }
-  });
-  canvas.addEventListener('mousedown', (e) => {
-    if (e.button === 0) G.mouseDown = true;
-  });
-  window.addEventListener('mouseup', (e) => {
-    if (e.button === 0) G.mouseDown = false;
-  });
-  window.addEventListener('blur', () => {
-    for (const k of Object.keys(keys)) keys[k] = false;
-    G.mouseDown = false;
-  });
-}
+  }
 
-export function consumeMouseDelta() {
-  const dx = G.mouseDX;
-  const dy = G.mouseDY;
-  G.mouseDX = 0;
-  G.mouseDY = 0;
-  return { dx, dy };
-}
+  down(code) { return this.keys.has(code); }
+  wasPressed(code) { return this.pressed.has(code); }
 
-export function axis() {
-  const k = G.keys;
-  let x = 0;
-  let y = 0;
-  if (k.KeyW || k.ArrowUp) y += 1;
-  if (k.KeyS || k.ArrowDown) y -= 1;
-  if (k.KeyA || k.ArrowLeft) x -= 1;
-  if (k.KeyD || k.ArrowRight) x += 1;
-  return { x, y };
+  // Drive / walk axes: -1..1.
+  driveInput() {
+    const throttle = (this.down('KeyW') || this.down('ArrowUp') ? 1 : 0) + (this.down('KeyS') || this.down('ArrowDown') ? -1 : 0);
+    const steer = (this.down('KeyA') || this.down('ArrowLeft') ? 1 : 0) + (this.down('KeyD') || this.down('ArrowRight') ? -1 : 0);
+    return { throttle, steer, handbrake: this.down('Space') };
+  }
+
+  walkInput() {
+    const f = (this.down('KeyW') || this.down('ArrowUp') ? 1 : 0) + (this.down('KeyS') || this.down('ArrowDown') ? -1 : 0);
+    const r = (this.down('KeyD') || this.down('ArrowRight') ? 1 : 0) + (this.down('KeyA') || this.down('ArrowLeft') ? -1 : 0);
+    return { forward: f, right: r, sprint: this.down('ShiftLeft') || this.down('ShiftRight') };
+  }
+
+  // Consume the per-frame edge state at the end of each frame.
+  endFrame() {
+    this.pressed.clear();
+    this.mouseDX = 0;
+    this.mouseDY = 0;
+    this.clicked = false;
+  }
 }

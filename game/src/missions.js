@@ -1,242 +1,394 @@
-// missions.js — the story of Solmar Bay: six chained missions with original
-// characters, dialogue, objectives and rewards. Each mission is a list of
-// steps; a step completes when the player reaches a place, enters a car,
-// defeats all enemies, or loses the wanted level. Completing a mission pays
-// cash, raises Street Rep, saves the game and unlocks the next one.
-import { G } from './state.js';
-import { LANDMARKS, moveMarker } from './city.js';
-import { spawnCar, spawnPolice } from './vehicles.js';
-import { spawnEnemy, clearEnemies } from './combat.js';
-import { sound } from './audio.js';
+// missions.js — the story of Porto Verde and the mission engine. Six chained
+// driving jobs for Lena Cross, from a first delivery to stealing Dante
+// Ferreira's gold supercar. Each mission is a list of steps (go to, enter a
+// car, pick up a fare, race checkpoints, fight guards, escape the heat);
+// the engine tracks the current step, spawns mission cars, fares and rival
+// crews, and pays out on completion.
+import * as THREE from 'three';
+import { ECONOMY } from './config.js';
+import { Car } from './vehicles.js';
+import { clamp, dist2D, formatCash, rand } from './util.js';
+
+export const STORY_INTRO =
+  'Porto Verde, 6:47 PM. Jax Moreno is back after five years away — his brother\'s ' +
+  'garage burned down, the debt collectors are circling, and the only person who ' +
+  'still answers his calls is Lena Cross, who runs Cross Motors and knows every ' +
+  'street in the city. Dante Ferreira owns the casinos, the docks and half the ' +
+  'cops. Jax is going to take it all back, one job at a time.';
 
 export const MISSIONS = [
   {
-    id: 'first-light',
-    title: 'Misi 1 — First Light',
-    brief: 'Rex Marlowe walks out of the Marina lockup with $150 and a name: Mara Voss.',
-    reward: 300,
-    rep: 10,
+    id: 'first-gear', title: '1 · First Gear', reward: ECONOMY.missionRewards[0],
+    briefing: 'LENA: "Jax, you\'re back. My coupe is parked up the street — bring it to Cross Motors. Drive like you remember how."',
     steps: [
-      { type: 'goto', pos: () => LANDMARKS.marina.pos, radius: 6, objective: 'Temui Mara Voss di Marina Pier', say: ['MARA: Rex! Masih hidup rupanya. Aku butuh sopir yang tidak banyak tanya.', 'REX: Aku butuh uang. Kita cocok.'] },
-      { type: 'goto', pos: () => LANDMARKS.garage.pos, radius: 8, objective: 'Antar Mara ke Sunset Garage (naik mobil, tekan E)', say: ['MARA: Garasiku di Sunset Avenue. Bawa aku ke sana, pelan-pelan saja.', 'TESSA (radio): Selamat datang kembali, Rex. Jangan bikin gara-gara dulu.'] },
-      { type: 'talk', pos: () => LANDMARKS.garage.pos, radius: 8, objective: 'Bicara dengan Mara di garasi (tekan E)', say: ['MARA: Bagus. Mulai sekarang kau kerja untukku. Uangmu ada di dasbor.', 'MARA: Dario Kells menguasai pelabuhan. Kita akan ambil alih, satu pekerjaan demi satu.'] },
+      { type: 'goto', x: 0, z: 66, label: 'Get to Lena\'s coupe' },
+      { type: 'enterVehicle', carId: 'lena-coupe', label: 'Get in the coupe' },
+      { type: 'driveTo', x: -90, z: 74, label: 'Drive to Cross Motors', radius: 10 },
     ],
   },
   {
-    id: 'the-courier',
-    title: 'Misi 2 — The Courier',
-    brief: 'A package at the docks, a drop at the Neon Palms. Simple — until it is not.',
-    reward: 600,
-    rep: 15,
+    id: 'fare-game', title: '2 · Fare Game', reward: ECONOMY.missionRewards[1],
+    briefing: 'LENA: "The taxi game pays cash every night. Three fares, all over town. Don\'t keep them waiting — and don\'t wreck my cab."',
+    timeLimit: 300,
     steps: [
-      { type: 'goto', pos: () => LANDMARKS.harbor.pos, radius: 9, objective: 'Ambil paket di Harbor Docks', say: ['MARA: Paket di dermaga delapan. Jangan dibuka. Jangan ditanya.', 'REX: Sejak kapan aku banyak tanya?'] },
-      { type: 'goto', pos: () => LANDMARKS.hotel.pos, radius: 9, objective: 'Antar paket ke Neon Palms Hotel — polisi mengawasi!', say: ['TESSA: Rex, ada patroli di belakangmu. Jangan ngebut, jangan panik.', 'REX: Aku tidak pernah panik. Aku hanya cepat.'] },
-      { type: 'talk', pos: () => LANDMARKS.hotel.pos, radius: 9, objective: 'Serahkan paket (tekan E)', say: ['MARA: Paket diterima. Kells mulai curiga — bagus. Orang curiga itu ceroboh.'] },
+      { type: 'enterVehicle', carId: 'taxi', label: 'Get in the taxi' },
+      { type: 'pickup', x: 240, z: -60, label: 'Pick up the fare on Playa Dorada' },
+      { type: 'deliver', x: 0, z: -180, label: 'Drop the fare Downtown' },
+      { type: 'pickup', x: 60, z: 240, label: 'Pick up the fare at the Docks' },
+      { type: 'deliver', x: -180, z: 60, label: 'Drop the fare in Barrio Viejo' },
+      { type: 'pickup', x: 120, z: 120, label: 'Pick up the fare in Midtown' },
+      { type: 'deliver', x: -90, z: 74, label: 'Drop the fare at Cross Motors' },
     ],
   },
   {
-    id: 'hot-wheels',
-    title: 'Misi 3 — Hot Wheels',
-    brief: 'Dario Kells keeps a gold Comet GT at the Coral Mall. It would look better in Mara’s garage.',
-    reward: 900,
-    rep: 20,
+    id: 'dockside-dash', title: '3 · Dockside Dash', reward: ECONOMY.missionRewards[2],
+    briefing: 'LENA: "Ferreira\'s boys left a box truck at the docks, full of casino chips. Take it. They\'ll shoot — shoot back or drive fast."',
     steps: [
-      { type: 'goto', pos: () => LANDMARKS.mall.pos, radius: 10, objective: 'Pergi ke Coral Mall — mobil emas Kells ada di sana', say: ['MARA: Comet GT emas. Milik Kells. Ambil. Bawa pulang.', 'TESSA: Alarmnya mati pukul tiga. Jangan sampai ketahuan... terlalu ketahuan.'] },
-      { type: 'steal', carId: 'comet', pos: () => LANDMARKS.mall.pos, radius: 12, objective: 'Curi Comet GT emas (tekan E di dekat mobil)', say: ['REX: Cantik sekali. Maaf, Tuan Kells. Ini sekarang punyaku.'] },
-      { type: 'goto', pos: () => LANDMARKS.garage.pos, radius: 9, objective: 'Bawa Comet GT ke Sunset Garage', say: ['MARA: Ha! Wajah Kells pasti merah padam. Mobil ini sekarang milik kita.'] },
+      { type: 'goto', x: 60, z: 258, label: 'Get to the docks' },
+      { type: 'enterVehicle', carId: 'dock-truck', label: 'Steal the box truck', guards: 2, wantedOnEnter: 2 },
+      { type: 'driveTo', x: -90, z: 74, label: 'Lose the heat — deliver the truck to Cross Motors', radius: 10 },
     ],
   },
   {
-    id: 'the-shakedown',
-    title: 'Misi 4 — The Shakedown',
-    brief: 'Kells’ crew is shaking down the warehouse district. Rex is going to shake back.',
-    reward: 1200,
-    rep: 25,
+    id: 'street-king', title: '4 · Street King', reward: ECONOMY.missionRewards[3],
+    briefing: 'LENA: "Tonight\'s street race decides who owns the night roads. Two rivals, eight gates. Beat them and the whole city will know your name."',
+    timeLimit: 180,
     steps: [
-      { type: 'goto', pos: () => LANDMARKS.warehouse.pos, radius: 10, objective: 'Pergi ke Kells Warehouse', say: ['MARA: Anak buah Kells memalak gudang itu tiap Jumat. Hari ini Jumat.', 'REX: Kalau begitu aku datang tepat waktu.'] },
-      { type: 'kill', count: 4, pos: () => LANDMARKS.warehouse.pos, radius: 14, objective: 'Usir 4 anak buah Kells (klik mouse untuk menembak)', say: ['KELLS CREW: Siapa kau?!', 'REX: Orang yang mengakhiri pungutan liar di sini.'] },
-      { type: 'goto', pos: () => LANDMARKS.garage.pos, radius: 9, objective: 'Kembali ke Sunset Garage', say: ['MARA: Gudang itu aman sekarang. Para pedagang akan mengingat namamu, Rex.'] },
+      { type: 'goto', x: 0, z: -240, label: 'Get to the start line, North Road' },
+      {
+        type: 'race', label: 'Race! Hit all 8 gates before your rivals',
+        checkpoints: [
+          { x: 0, z: -240 }, { x: 240, z: -240 }, { x: 240, z: 0 }, { x: 240, z: 240 },
+          { x: 0, z: 240 }, { x: -240, z: 240 }, { x: -240, z: 0 }, { x: -240, z: -240 },
+        ],
+      },
     ],
   },
   {
-    id: 'harbor-lights',
-    title: 'Misi 5 — Harbor Lights',
-    brief: 'A ledger that can sink Kells is changing hands at the harbour tonight — in the middle of a gunfight.',
-    reward: 1800,
-    rep: 30,
+    id: 'beach-run', title: '5 · Beach Run', reward: ECONOMY.missionRewards[4],
+    briefing: 'LENA: "A package is waiting on the beach. Ferreira\'s cops will be all over you the second you grab it. Two minutes, downtown. Go."',
+    timeLimit: 150,
     steps: [
-      { type: 'goto', pos: () => LANDMARKS.harbor.pos, radius: 10, objective: 'Pergi ke Harbor Docks — malam ini ada transaksi', say: ['TESSA: Buku besar Kells ada di kontainer biru. Ambil sebelum orangnya datang.', 'REX: Dan kalau orangnya datang duluan? TESSA: Maka kau tembak duluan.'] },
-      { type: 'kill', count: 6, pos: () => LANDMARKS.harbor.pos, radius: 16, objective: 'Rebut buku besar — kalahkan 6 penjaga Kells', say: ['KELLS CREW: Buku itu milik Bos Kells!', 'REX: Sekarang milik Mara.'] },
-      { type: 'escape', wanted: 0, objective: 'Lolos dari polisi, lalu kembali ke garasi', say: ['TESSA: Polisi menuju pelabuhan! Hilang dari radar, Rex!'] },
-      { type: 'goto', pos: () => LANDMARKS.garage.pos, radius: 9, objective: 'Bawa buku besar ke Sunset Garage', say: ['MARA: Dengan buku ini, Kells selesai. Kau sudah bukan sopir lagi, Rex. Kau partner.'] },
+      { type: 'goto', x: 305, z: 120, label: 'Grab the package on the beach', wantedOnStart: 3 },
+      { type: 'deliver', x: 0, z: -180, label: 'Deliver downtown — the heat is on!', radius: 12 },
     ],
   },
   {
-    id: 'the-big-score',
-    title: 'Misi 6 — The Big Score',
-    brief: 'The final job: stop Kells’ armoured van, take the harbour money, and vanish into the Solmar night.',
-    reward: 4000,
-    rep: 40,
+    id: 'ferreira-job', title: '6 · The Ferreira Job', reward: ECONOMY.missionRewards[5],
+    briefing: 'LENA: "This is it. Ferreira\'s gold supercar is in his downtown garage. Take it, outrun everything, and bring it home. After this, Porto Verde is ours."',
     steps: [
-      { type: 'goto', pos: () => LANDMARKS.hotel.pos, radius: 10, objective: 'Temui Tessa di Neon Palms — rencana terakhir', say: ['TESSA: Van lapis baja Kells lewat Marina Boulevard tiap sore. Satu van, dua pengawal.', 'REX: Kita hentikan van itu. Kita ambil uangnya. Kita selesai.'] },
-      { type: 'kill', count: 3, pos: () => LANDMARKS.police.pos, radius: 18, objective: 'Hentikan konvoi Kells di SBPD Central — kalahkan 3 pengawal', say: ['KELLS CREW: Bos tidak akan membiarkan ini!', 'REX: Bosmu sudah kalah. Dia hanya belum tahu.'] },
-      { type: 'escape', wanted: 0, objective: 'Lolos dari kejaran polisi (wanted 3)!', say: ['TESSA: Seluruh kota mengejarmu, Rex! Jangan berhenti!'] },
-      { type: 'goto', pos: () => LANDMARKS.safehouse.pos, radius: 9, objective: 'Bawa uangnya ke Safehouse Rex', say: ['MARA: Selesai. Kells jatuh, pelabuhan bebas, dan Solmar Bay milik kita.', 'REX: Bukan milik kita, Mara. Milik orang-orangnya. Kita hanya menjaganya.'] },
+      { type: 'goto', x: 60, z: -180, label: 'Get to Ferreira\'s downtown garage' },
+      { type: 'enterVehicle', carId: 'gold-car', label: 'Steal the gold supercar', guards: 3, wantedOnEnter: 4 },
+      { type: 'driveTo', x: -90, z: 74, label: 'Bring the gold car home to Cross Motors', radius: 10 },
     ],
   },
 ];
 
-export function currentMission() {
-  return MISSIONS[G.missionIndex] || null;
-}
+const MISSION_CARS = {
+  'lena-coupe': { type: 'sports', x: 0, z: 63.5, heading: 0, color: 0xd94f30 },
+  'taxi': { type: 'taxi', x: -90, z: 74, heading: Math.PI / 2, color: 0xf7c600 },
+  'dock-truck': { type: 'truck', x: 60, z: 270, heading: Math.PI, color: 0x2471a3 },
+  'gold-car': { type: 'sports', x: 60, z: -176, heading: Math.PI, color: 0xf7c600 },
+};
 
-export function missionLabel() {
-  const m = currentMission();
-  return m ? m.title : 'Cerita selesai — Free Roam';
-}
+// A rival crew member on foot: shoots at the player, can be shot.
+export class Enemy {
+  constructor(scene, x, z) {
+    this.x = x; this.z = z;
+    this.hp = 100;
+    this.dead = false;
+    this.shootTimer = rand(0.5, 1.5);
+    this.group = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.8, 0.36), new THREE.MeshLambertMaterial({ color: 0x6c3483 }));
+    body.position.y = 1.08; this.group.add(body);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.36, 0.36), new THREE.MeshLambertMaterial({ color: 0x8d5524 }));
+    head.position.y = 1.66; this.group.add(head);
+    const gun = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.14, 0.42), new THREE.MeshLambertMaterial({ color: 0x111111 }));
+    gun.position.set(0.3, 1.0, 0.3); this.group.add(gun);
+    this.group.position.set(x, 0, z);
+    scene.add(this.group);
+    this.scene = scene;
+    this.radius = 1;
+  }
 
-function stepPos(step) {
-  return typeof step.pos === 'function' ? step.pos() : step.pos;
-}
+  hit(dmg) {
+    this.hp -= dmg;
+    if (this.hp <= 0) this.die();
+  }
 
-export function showDialog(lines) {
-  G.dialog = [...lines];
-  G.dialogTimer = 0;
-}
+  die() {
+    this.dead = true;
+    this.scene.remove(this.group);
+  }
 
-export function setObjective(text) {
-  G.missionObjective = text;
-}
-
-export function startMission(index) {
-  const m = MISSIONS[index];
-  if (!m) return false;
-  G.missionIndex = index;
-  G.missionStep = 0;
-  G.missionActive = true;
-  G.flags.missionStarted = true;
-  G.banner = '';
-  G.bannerTimer = 0;
-  clearEnemies();
-  sound.missionStart();
-  sound.phone();
-  showDialog([`${m.title}`, m.brief]);
-  enterStep();
-  return true;
-}
-
-export function enterStep() {
-  const m = currentMission();
-  if (!m) return;
-  const step = m.steps[G.missionStep];
-  if (!step) { completeMission(); return; }
-  setObjective(step.objective);
-  if (step.say) showDialog(step.say);
-  const pos = stepPos(step);
-  G.missionMarker = pos ? { x: pos.x, z: pos.z } : null;
-  moveMarker(G.missionMarker);
-  if (step.type === 'kill') {
-    const base = stepPos(step);
-    for (let i = 0; i < step.count; i++) {
-      spawnEnemy(base.x + (Math.random() - 0.5) * 18, base.z + (Math.random() - 0.5) * 18);
+  update(dt, player, fx, audio) {
+    if (this.dead) return;
+    const d = dist2D(this.x, this.z, player.x, player.z);
+    this.group.rotation.y = Math.atan2(-(player.z - this.z), player.x - this.x);
+    this.shootTimer -= dt;
+    if (d < 45 && this.shootTimer <= 0) {
+      this.shootTimer = rand(1.0, 1.8);
+      fx.tracer(this.x, 1.2, this.z, player.x, 1.2, player.z, 0xffaa33);
+      audio.gunshot();
+      if (Math.random() < 0.55) player.damage(rand(4, 9));
     }
-    step.spawned = step.count;
-    step.killedAtStart = G.kills;
-  }
-  if (step.type === 'steal') {
-    const base = stepPos(step);
-    const car = spawnCar(step.carId, base.x + 8, base.z + 4, 0.6, { parked: true });
-    step.targetCar = car;
-    car.mesh.rotation.y = 0.6;
-  }
-  if (step.type === 'escape') {
-    G.wanted = 3;
-    G.wantedHeat = 0.4;
-    spawnPolice(2);
   }
 }
 
-export function advanceStep() {
-  const m = currentMission();
-  if (!m) return;
-  G.missionStep += 1;
-  if (G.missionStep >= m.steps.length) completeMission();
-  else enterStep();
-}
-
-export function completeMission() {
-  const m = currentMission();
-  if (!m) return;
-  G.missionActive = false;
-  G.missionObjective = '';
-  G.missionMarker = null;
-  moveMarker(null);
-  clearEnemies();
-  G.money += m.reward;
-  G.respect = Math.min(100, G.respect + m.rep);
-  G.missionsDone += 1;
-  G.missionIndex += 1;
-  G.flags.missionCompleted = true;
-  sound.missionComplete();
-  showDialog([`MISI SELESAI — ${m.title}`, `Hadiah: $${m.reward}  •  Rep +${m.rep}`]);
-  G.banner = `MISI SELESAI  +$${m.reward}`;
-  G.bannerTimer = 3.5;
-  if (G.onMissionComplete) G.onMissionComplete(m);
-  if (G.missionIndex >= MISSIONS.length) {
-    G.banner = 'SOLMAR BAY MILIKMU — Cerita Selesai!';
-    showDialog(['MARA: Kau legenda sekarang, Rex. Solmar Bay tidak akan melupakanmu.', 'Free roam: koin emas, mobil, dan kota ini milikmu.']);
+export class MissionEngine {
+  constructor(scene, city) {
+    this.scene = scene;
+    this.city = city;
+    this.activeIndex = -1;
+    this.stepIndex = 0;
+    this.stepTimer = 0;
+    this.missionTime = 0;
+    this.missionCars = {}; // carId -> Car
+    this.enemies = [];
+    this.rivals = [];
+    this.raceCheckpoint = 0;
+    this.farePed = null;
+    this.markerPos = null;
+    this.markerLabel = '';
+    this.onComplete = null; // (mission) => void
+    this.onFail = null;
+    this.onStep = null; // (label) => void
+    this.buildMarker();
   }
-}
 
-export function updateMissions(dt) {
-  if (!G.missionActive) return;
-  const m = currentMission();
-  if (!m) return;
-  const step = m.steps[G.missionStep];
-  if (!step) return;
-  const p = G.player.pos;
-  const inCar = !!G.player.inCar;
-  const pos = stepPos(step);
-  if (step.type === 'goto' || step.type === 'talk') {
-    if (pos && Math.hypot(p.x - pos.x, p.z - pos.z) < step.radius) {
-      if (step.type === 'talk') {
-        // talk needs E; the HUD prompts, main.js calls tryTalk()
-        return;
+  buildMarker() {
+    const geo = new THREE.CylinderGeometry(2.2, 2.2, 30, 16, 1, true);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffd24a, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false });
+    this.marker = new THREE.Mesh(geo, mat);
+    this.marker.position.y = 15;
+    this.marker.visible = false;
+    this.scene.add(this.marker);
+    const ringGeo = new THREE.TorusGeometry(3, 0.25, 8, 24);
+    this.markerRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffd24a }));
+    this.markerRing.rotation.x = -Math.PI / 2;
+    this.markerRing.position.y = 0.3;
+    this.markerRing.visible = false;
+    this.scene.add(this.markerRing);
+  }
+
+  get active() { return this.activeIndex >= 0; }
+  get mission() { return this.active ? MISSIONS[this.activeIndex] : null; }
+  get step() { return this.active ? this.mission.steps[this.stepIndex] : null; }
+
+  start(index, ctx) {
+    this.cleanup(ctx);
+    this.activeIndex = index;
+    this.stepIndex = 0;
+    this.stepTimer = 0;
+    this.missionTime = 0;
+    const m = this.mission;
+    ctx.audio.missionStart();
+    ctx.toast(m.title + ' — ' + m.briefing, 8);
+    this.beginStep(ctx);
+  }
+
+  beginStep(ctx) {
+    const s = this.step;
+    if (!s) return;
+    this.markerLabel = s.label;
+    if (s.type === 'enterVehicle' && !this.missionCars[s.carId]) {
+      const def = MISSION_CARS[s.carId];
+      const car = new Car(this.scene, def.type, def.x, def.z, def.heading, def.color);
+      this.missionCars[s.carId] = car;
+      ctx.allCars.push(car);
+      if (s.guards) {
+        for (let i = 0; i < s.guards; i++) {
+          const e = new Enemy(this.scene, def.x + rand(-8, 8), def.z + rand(-8, 8));
+          this.enemies.push(e);
+        }
+        ctx.toast('Ferreira\'s crew is guarding the car!', 4);
       }
-      advanceStep();
     }
-  } else if (step.type === 'steal') {
-    if (step.targetCar && G.player.inCar === step.targetCar) advanceStep();
-  } else if (step.type === 'kill') {
-    const killed = G.kills - (step.killedAtStart || 0);
-    const left = step.count - killed;
-    setObjective(`${step.objective}  (${Math.max(0, left)} tersisa)`);
-    if (left <= 0 && G.enemies.length === 0) advanceStep();
-  } else if (step.type === 'escape') {
-    setObjective(`${step.objective}  (Wanted: ${'★'.repeat(G.wanted)}${'☆'.repeat(5 - G.wanted)})`);
-    if (G.wanted === 0) advanceStep();
+    if (s.type === 'race') {
+      this.raceCheckpoint = 0;
+      // Two rival racers line up at the start.
+      for (let i = 0; i < 2; i++) {
+        const rival = new Car(this.scene, 'sports', -6 + i * 12, -243.5, 0, [0x1abc9c, 0x9b59b6][i]);
+        rival.cruise = 30 + i * 2;
+        rival.cp = 0;
+        this.rivals.push(rival);
+        ctx.allCars.push(rival);
+      }
+    }
+    if (s.type === 'pickup') {
+      // A fare waits on the sidewalk.
+      const ped = ctx.peds.spawnOneAt ? ctx.peds.spawnOneAt(s.x, s.z + 9) : null;
+      this.farePed = ped;
+    }
+    if (this.onStep) this.onStep(s.label);
+    this.updateMarker();
   }
-  // marker pulse handled by main loop via G.markerGroup
-}
 
-export function tryTalk() {
-  if (!G.missionActive) return false;
-  const m = currentMission();
-  if (!m) return false;
-  const step = m.steps[G.missionStep];
-  if (!step || step.type !== 'talk') return false;
-  const pos = stepPos(step);
-  if (pos && Math.hypot(G.player.pos.x - pos.x, G.player.pos.z - pos.z) < step.radius + 4) {
-    advanceStep();
-    return true;
+  updateMarker() {
+    const s = this.step;
+    if (!s) { this.marker.visible = false; this.markerRing.visible = false; this.markerPos = null; return; }
+    let pos = null;
+    if (s.type === 'race') pos = s.checkpoints[this.raceCheckpoint];
+    else if (s.type === 'enterVehicle') {
+      const c = this.missionCars[s.carId];
+      pos = c ? { x: c.x, z: c.z } : MISSION_CARS[s.carId];
+    } else pos = { x: s.x, z: s.z };
+    this.markerPos = pos;
+    this.marker.position.set(pos.x, 15, pos.z);
+    this.markerRing.position.set(pos.x, 0.3, pos.z);
+    this.marker.visible = true;
+    this.markerRing.visible = true;
   }
-  return false;
-}
 
-// Called when the player presses M in free roam.
-export function startNextMission() {
-  if (G.missionActive) return 'already';
-  if (G.missionIndex >= MISSIONS.length) return 'done';
-  startMission(G.missionIndex);
-  return 'started';
+  advance(ctx) {
+    this.stepIndex++;
+    if (this.stepIndex >= this.mission.steps.length) {
+      this.complete(ctx);
+      return;
+    }
+    this.beginStep(ctx);
+  }
+
+  complete(ctx) {
+    const m = this.mission;
+    ctx.audio.missionDone();
+    ctx.addCash(m.reward);
+    ctx.addRep(25);
+    ctx.toast('MISSION COMPLETE: ' + m.title + ' — +' + formatCash(m.reward), 6);
+    if (this.onComplete) this.onComplete(m);
+    this.activeIndex = -1;
+    this.stepIndex = 0;
+    this.marker.visible = false;
+    this.markerRing.visible = false;
+    this.markerPos = null;
+    this.cleanup(ctx);
+  }
+
+  fail(ctx, reason) {
+    ctx.toast('MISSION FAILED: ' + reason + ' — press N to retry.', 6);
+    if (this.onFail) this.onFail(this.mission);
+    this.activeIndex = -1;
+    this.stepIndex = 0;
+    this.marker.visible = false;
+    this.markerRing.visible = false;
+    this.markerPos = null;
+    this.cleanup(ctx);
+  }
+
+  cleanup(ctx) {
+    for (const id of Object.keys(this.missionCars)) {
+      const car = this.missionCars[id];
+      if (ctx.player.car !== car) {
+        car.remove();
+        const i = ctx.allCars.indexOf(car);
+        if (i >= 0) ctx.allCars.splice(i, 1);
+      }
+    }
+    this.missionCars = {};
+    for (const e of this.enemies) if (!e.dead) e.die();
+    this.enemies = [];
+    for (const r of this.rivals) {
+      r.remove();
+      const i = ctx.allCars.indexOf(r);
+      if (i >= 0) ctx.allCars.splice(i, 1);
+    }
+    this.rivals = [];
+    this.farePed = null;
+  }
+
+  update(dt, ctx) {
+    if (!this.active) return;
+    const m = this.mission;
+    const s = this.step;
+    const p = ctx.player;
+    this.missionTime += dt;
+    if (m.timeLimit && this.missionTime > m.timeLimit) {
+      this.fail(ctx, 'Out of time');
+      return;
+    }
+    // Enemies keep shooting.
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const e = this.enemies[i];
+      if (e.dead) { this.enemies.splice(i, 1); continue; }
+      e.update(dt, p, ctx.fx, ctx.audio);
+    }
+    // Mission-car destroyed = fail (except the race rivals).
+    if (s && s.type !== 'race') {
+      for (const id of Object.keys(this.missionCars)) {
+        if (this.missionCars[id].dead) { this.fail(ctx, 'The mission car was wrecked'); return; }
+      }
+    }
+    // Marker pulse.
+    this.marker.material.opacity = 0.2 + Math.sin(this.missionTime * 4) * 0.08;
+    this.markerRing.scale.setScalar(1 + Math.sin(this.missionTime * 4) * 0.12);
+    this.updateMarker();
+
+    switch (s.type) {
+      case 'goto':
+        if (dist2D(p.x, p.z, s.x, s.z) < (s.radius || 5)) {
+          if (s.wantedOnStart) ctx.police.setStars(s.wantedOnStart);
+          this.advance(ctx);
+        }
+        break;
+      case 'enterVehicle': {
+        const car = this.missionCars[s.carId];
+        if (car && p.car === car) {
+          if (s.wantedOnEnter) ctx.police.setStars(s.wantedOnEnter);
+          ctx.toast('Got it. Now drive!', 3);
+          this.advance(ctx);
+        }
+        break;
+      }
+      case 'driveTo':
+      case 'deliver':
+        if (dist2D(p.x, p.z, s.x, s.z) < (s.radius || 8)) {
+          if (s.wantedOnStart) ctx.police.setStars(s.wantedOnStart);
+          this.advance(ctx);
+        }
+        break;
+      case 'pickup':
+        if (p.car && dist2D(p.x, p.z, s.x, s.z) < 8) {
+          ctx.audio.coin();
+          ctx.toast('Fare aboard — drive!', 3);
+          if (this.farePed) {
+            // The fare gets in: remove their sidewalk figure.
+            const idx = ctx.peds.peds.indexOf(this.farePed);
+            if (idx >= 0) { ctx.scene.remove(this.farePed.mesh); ctx.peds.peds.splice(idx, 1); }
+            this.farePed = null;
+          }
+          this.advance(ctx);
+        }
+        break;
+      case 'race': {
+        const cp = s.checkpoints[this.raceCheckpoint];
+        if (dist2D(p.x, p.z, cp.x, cp.z) < 9) {
+          this.raceCheckpoint++;
+          ctx.audio.coin();
+          if (this.raceCheckpoint >= s.checkpoints.length) {
+            this.advance(ctx);
+            break;
+          }
+          ctx.toast('Gate ' + (this.raceCheckpoint + 1) + ' of ' + s.checkpoints.length, 2);
+        }
+        // Rivals follow the gates.
+        for (const r of this.rivals) {
+          if (r.dead) continue;
+          const rcp = s.checkpoints[Math.min(r.cp, s.checkpoints.length - 1)];
+          const d = dist2D(r.x, r.z, rcp.x, rcp.z);
+          if (d < 9) r.cp++;
+          if (r.cp >= s.checkpoints.length) {
+            this.fail(ctx, 'A rival finished first');
+            return;
+          }
+          const targetAngle = Math.atan2(-(rcp.z - r.z), rcp.x - r.x);
+          let dh = targetAngle - r.heading;
+          while (dh > Math.PI) dh -= Math.PI * 2;
+          while (dh < -Math.PI) dh += Math.PI * 2;
+          const steer = clamp(dh * 1.6, -1, 1);
+          r.step(dt, { throttle: 1, steer, handbrake: false }, this.city, 1);
+        }
+        break;
+      }
+    }
+  }
 }

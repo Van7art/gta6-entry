@@ -1,94 +1,69 @@
-// config.js — every tunable number and every proper name of Solmar Bay in one
-// place, so balancing and renaming never means hunting through the game code.
-// Nothing here is from any commercial game: the city, people, cars and story
-// below are all original to this entry.
-export const GAME_TITLE = 'SOLMAR BAY';
-export const GAME_SUBTITLE = 'Streets of Gold';
-export const SAVE_KEY = 'solmarbay-save-v1';
-
-// City layout: a grid of square blocks separated by roads.
-export const BLOCK = 40; // block side in world units
-export const ROAD = 14; // road width
-export const GRID = 9; // blocks per side (odd, so a plaza sits in the middle)
-export const CITY_HALF = ((BLOCK + ROAD) * GRID) / 2; // ~243
-export const PITCH = BLOCK + ROAD; // distance between block centres
-export const BEACH_Z = CITY_HALF + 46; // ocean starts here (south edge)
-
-// Palette: sun-soaked coastal city, warm afternoon light.
-export const PALETTE = {
-  skyTop: 0x2f7fc4,
-  skyBottom: 0xffd9a0,
-  sun: 0xfff2cf,
-  road: 0x2e3138,
-  roadLine: 0xf5d76e,
-  sidewalk: 0x9aa0a3,
-  sand: 0xe8cf9a,
-  sea: 0x1f7fa8,
-  grass: 0x5da24a,
-  building: [0xe8b48a, 0xd98f6a, 0x7fb3d5, 0xf2e3c6, 0xc96f5a, 0x8fa8bf, 0xe6c25a, 0x9db98a],
-  neon: [0xff5da2, 0x37e6c8, 0xffc93c, 0x7c5cff],
+// config.js — every tunable constant of Porto Verde: city layout, districts,
+// vehicle stats, wanted rules and mission rewards. One place to tune the game.
+export const CITY = {
+  pitch: 60, // distance between road centrelines
+  road: 14, // road width
+  block: 46, // block width (pitch - road)
+  roads: [-240, -180, -120, -60, 0, 60, 120, 180, 240],
+  half: 240, // last road centreline
+  groundHalf: 320, // ground plane half-size (includes beach + harbour apron)
+  lane: 3.5, // lane offset from a road centreline
 };
 
-// Original characters of the story.
-export const CHARACTERS = {
-  player: { name: 'Rex Marlowe', role: 'wheelman, fresh out of the Marina lockup' },
-  mara: { name: 'Mara Voss', role: 'fixer who runs the Sunset Garage' },
-  dario: { name: 'Dario Kells', role: 'harbour boss who owns half the docks' },
-  tessa: { name: 'Tessa Rook', role: 'lookout with a police scanner and a fast mouth' },
-  officer: { name: 'Officer Hale', role: 'Solmar Bay PD, very keen on paperwork' },
+export const DISTRICTS = {
+  downtown: { name: 'Downtown', minH: 34, maxH: 92, color: [0x8fa3b8, 0x7d94a8, 0x9fb0c0, 0x6e8296] },
+  beach: { name: 'Playa Dorada', minH: 12, maxH: 30, color: [0xe8d9b0, 0xf0e2c0, 0xdcc898, 0xe8d0a0] },
+  harbour: { name: 'Porto Docks', minH: 8, maxH: 13, color: [0x9a8f7a, 0x8a7f6e, 0xa89a82, 0x7c7263] },
+  oldtown: { name: 'Barrio Viejo', minH: 6, maxH: 10, color: [0xd8a070, 0xc89060, 0xe0b088, 0xb87850] },
+  midtown: { name: 'Midtown', minH: 12, maxH: 26, color: [0xb0a890, 0xa09880, 0xc0b8a0, 0x988e78] },
 };
 
-// Original car models (names invented for this game).
-export const CAR_MODELS = [
-  { id: 'comet', name: 'Comet GT', color: 0xffc93c, top: 46, accel: 26, grip: 2.6, sport: true },
-  { id: 'sunset', name: 'Sunset Coupe', color: 0xd84a4a, top: 38, accel: 20, grip: 2.2, sport: false },
-  { id: 'marlin', name: 'Marlin Sedan', color: 0x4a7fd8, top: 34, accel: 17, grip: 2.0, sport: false },
-  { id: 'dune', name: 'Dune Pickup', color: 0x7a9a4a, top: 32, accel: 16, grip: 1.8, sport: false },
-  { id: 'taxi', name: 'Bay Cab', color: 0xf2c230, top: 33, accel: 16, grip: 2.0, sport: false },
-  { id: 'police', name: 'SBPD Interceptor', color: 0x1c2733, top: 42, accel: 24, grip: 2.5, sport: true },
-  { id: 'van', name: 'Harbor Van', color: 0xcccccc, top: 28, accel: 13, grip: 1.6, sport: false },
-];
+// Block (bx, bz) in -4..4 -> district key.
+export function districtFor(bx, bz) {
+  if (bx >= 3) return 'beach';
+  if (bz >= 3) return 'harbour';
+  if (bx <= -2) return 'oldtown';
+  if (bz <= -2 && Math.abs(bx) <= 1) return 'downtown';
+  return 'midtown';
+}
 
-export const TUNING = {
-  walkSpeed: 7,
-  runSpeed: 11,
-  jumpSpeed: 8.5,
-  gravity: 22,
-  playerRadius: 0.9,
-  playerHealth: 100,
+export const VEHICLE_STATS = {
+  sedan: { accel: 14, maxSpeed: 34, maxReverse: 10, turn: 1.9, grip: 6.5, hp: 100, mass: 1.0 },
+  sports: { accel: 19, maxSpeed: 46, maxReverse: 11, turn: 2.1, grip: 7.5, hp: 90, mass: 0.9 },
+  taxi: { accel: 13, maxSpeed: 33, maxReverse: 10, turn: 1.9, grip: 6.5, hp: 100, mass: 1.0 },
+  truck: { accel: 9, maxSpeed: 27, maxReverse: 8, turn: 1.4, grip: 5.5, hp: 160, mass: 1.8 },
+  van: { accel: 11, maxSpeed: 29, maxReverse: 9, turn: 1.6, grip: 6.0, hp: 120, mass: 1.3 },
+  police: { accel: 17, maxSpeed: 42, maxReverse: 11, turn: 2.0, grip: 7.0, hp: 140, mass: 1.1 },
+  pickup: { accel: 15, maxSpeed: 36, maxReverse: 10, turn: 1.8, grip: 6.2, hp: 110, mass: 1.1 },
+};
+
+export const WANTED = {
+  maxStars: 5,
+  decaySeconds: 9, // seconds unseen before one star drops
+  bustSeconds: 3, // seconds pinned by police before busted
+  finePerStar: 150,
+  resprayCost: 200,
+  // how many police cars hunt the player per star level
+  policePerStar: [0, 2, 3, 4, 5, 6],
+};
+
+export const PLAYER_STATS = {
+  walkSpeed: 6,
+  sprintSpeed: 10,
+  health: 100,
   pistolDamage: 34,
-  pistolRange: 70,
-  pistolCooldown: 0.22,
-  enemyHealth: 68,
-  trafficCount: 14,
-  pedCount: 26,
-  policeMax: 4,
-  wantedDecaySeconds: 26,
-  bustDistance: 2.6,
-  bustSeconds: 2.5,
-  coinCount: 12,
-  coinValue: 100,
-  startMoney: 150,
+  pistolRange: 60,
+  pistolAmmo: 12,
+  punchDamage: 12,
 };
 
-// Street names for the HUD location line (all invented).
-export const STREET_NAMES = [
-  'Marina Boulevard', 'Palm Row', 'Sunset Avenue', 'Coral Street',
-  'Harbor Lane', 'Neon Mile', 'Cactus Drive', 'Bayfront Road',
-];
+export const ECONOMY = {
+  startCash: 150,
+  repairCostPerHp: 2,
+  coinValue: 50,
+  missionRewards: [400, 650, 900, 1200, 1500, 3000],
+};
 
-export function streetNameAt(x, z) {
-  const i = Math.abs(Math.floor(x / PITCH) + Math.floor(z / PITCH) * 3) % STREET_NAMES.length;
-  return STREET_NAMES[i];
-}
-
-// Seeded random so the city layout is the same every run.
-export function mulberry32(seed) {
-  let a = seed >>> 0;
-  return function random() {
-    a |= 0; a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+export const SAVE_KEY = 'porto-verde-save-v1';
+export const GAME_TITLE = 'Porto Verde: Full Throttle';
+export const CITY_NAME = 'Porto Verde';
