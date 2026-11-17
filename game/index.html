@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solmar Bay — Streets of Gold</title>
+<link rel="stylesheet" href="./style.css">
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
+</head>
+<body>
+<canvas id="game" aria-label="Solmar Bay: an open-world crime game. Explore the city on foot or by car, take on missions, and stay out of jail."></canvas>
+<p id="status" role="status" aria-live="polite"></p>
+
+<!-- ============ HUD ============ -->
+<div id="hud" style="display:none">
+  <div id="hud-top-left">
+    <div id="hud-money">$150</div>
+    <div class="hud-bar"><div id="hud-health-fill"></div><span id="hud-health-text">100</span></div>
+    <div class="hud-bar rep"><div id="hud-rep-fill"></div><span id="hud-rep-text">REP 0</span></div>
+    <div id="hud-mission">Misi 1 — First Light</div>
+  </div>
+  <div id="hud-top-right">
+    <div id="hud-stars">☆☆☆☆☆</div>
+    <div id="hud-clock">10:05</div>
+    <div id="hud-street">Marina Boulevard</div>
+  </div>
+  <div id="hud-objective"><div id="hud-objective-title">Misi</div><div class="obj-text"></div></div>
+  <div id="hud-dialog"><span id="hud-dialog-name"></span><span id="hud-dialog-text"></span></div>
+  <div id="hud-banner"></div>
+  <div id="hud-bust"></div>
+  <div id="hud-prompt"></div>
+  <div id="hud-speed"><span id="hud-speed-value">0</span><span class="unit">km/h</span><div id="hud-car-name"></div></div>
+  <div id="hud-crosshair">+</div>
+  <canvas id="minimap" width="180" height="180" aria-label="Minimap of Solmar Bay"></canvas>
+  <div id="hud-controls">WASD gerak &nbsp;•&nbsp; Mouse kamera &nbsp;•&nbsp; E masuk mobil &nbsp;•&nbsp; Klik tembak &nbsp;•&nbsp; M misi &nbsp;•&nbsp; P jeda</div>
+</div>
+
+<!-- ============ TITLE SCREEN ============ -->
+<div id="screen-title" class="screen">
+  <div class="panel">
+    <div class="kicker">SEBUAH GAME OPEN-WORLD ORISINAL</div>
+    <h1>SOLMAR BAY</h1>
+    <h2>Streets of Gold</h2>
+    <p class="story">Rex Marlowe keluar dari penjara Marina dengan $150 di saku dan satu nama:
+    <b>Mara Voss</b>, fixer yang menjalankan Sunset Garage. Di seberang pelabuhan,
+    <b>Dario Kells</b> menguasai dermaga dengan tangan besi. Enam misi. Satu kota
+    yang tidak pernah tidur. Ambil kembali Solmar Bay — satu pekerjaan demi satu.</p>
+    <div class="missions-preview">
+      <span>1 First Light</span><span>2 The Courier</span><span>3 Hot Wheels</span>
+      <span>4 The Shakedown</span><span>5 Harbor Lights</span><span>6 The Big Score</span>
+    </div>
+    <div class="buttons">
+      <button id="btn-start" class="big">▶ MULAI CERITA</button>
+      <button id="btn-continue">Lanjutkan Save</button>
+    </div>
+    <p class="controls">WASD jalan / mengemudi &nbsp;•&nbsp; Mouse: kamera &amp; bidik &nbsp;•&nbsp; Klik: tembak
+    &nbsp;•&nbsp; E: masuk / keluar mobil &nbsp;•&nbsp; M: mulai misi &nbsp;•&nbsp; Shift: lari &nbsp;•&nbsp; Spasi: lompat &nbsp;•&nbsp; P: jeda</p>
+    <p class="fine">Kota, karakter, kendaraan, cerita, art &amp; musik semuanya orisinal. Suara disintesis WebAudio — tanpa file audio. Progress tersimpan otomatis di browser ini.</p>
+  </div>
+</div>
+
+<!-- ============ PAUSE MENU ============ -->
+<div id="screen-pause" class="screen" style="display:none">
+  <div class="panel small">
+    <h1>JEDA</h1>
+    <p class="story">Solmar Bay menunggumu, Rex.</p>
+    <div class="buttons col">
+      <button id="btn-resume" class="big">Lanjutkan</button>
+      <button id="btn-save">Simpan Game</button>
+      <button id="btn-mute">Suara: Hidup</button>
+      <button id="btn-restart">Mulai Ulang</button>
+      <button id="btn-quit">Simpan &amp; Keluar ke Judul</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ WASTED / BUSTED ============ -->
+<div id="screen-end" class="screen" style="display:none">
+  <div class="panel small">
+    <h1 id="end-title">WASTED</h1>
+    <p id="end-text" class="story"></p>
+    <div class="buttons col">
+      <button id="btn-end-continue" class="big">Bangun Lagi</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

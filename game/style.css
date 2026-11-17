@@ -1,0 +1,71 @@
+/* style.css — all HUD, title, pause and end-screen styling for Solmar Bay. */
+html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1520;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: #fff; }
+#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+body.hurt #game { filter: brightness(1.6) saturate(0.4); }
+
+/* ---- HUD ---- */
+#hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+#hud-top-left { position: absolute; top: 14px; left: 16px; }
+#hud-money { font-size: 30px; font-weight: 800; color: #7dff9e; text-shadow: 0 2px 6px #000; }
+.hud-bar { position: relative; width: 210px; height: 16px; background: #000a; border: 1px solid #ffffff55;
+  border-radius: 8px; margin-top: 6px; overflow: hidden; }
+.hud-bar div { height: 100%; background: #4ade80; width: 100%; transition: width .2s; }
+.hud-bar.rep div { background: #c58cff; width: 0%; }
+.hud-bar span { position: absolute; inset: 0; text-align: center; font-size: 11px; font-weight: 700; line-height: 16px; }
+#hud-mission { margin-top: 6px; font-size: 13px; font-weight: 700; color: #ffd76e; text-shadow: 0 1px 4px #000; }
+#hud-top-right { position: absolute; top: 14px; right: 16px; text-align: right; }
+#hud-stars { font-size: 26px; letter-spacing: 4px; text-shadow: 0 2px 6px #000; }
+#hud-clock { font-size: 20px; font-weight: 700; text-shadow: 0 2px 4px #000; }
+#hud-street { font-size: 13px; color: #ffffffcc; text-shadow: 0 1px 4px #000; }
+#hud-objective { position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+  background: #000a; border-left: 4px solid #ffc93c; padding: 8px 14px; border-radius: 6px;
+  max-width: 460px; text-align: center; }
+#hud-objective-title { font-size: 12px; font-weight: 800; color: #ffc93c; letter-spacing: 1px; text-transform: uppercase; }
+#hud-objective .obj-text { font-size: 15px; font-weight: 600; }
+#hud-dialog { display: none; position: absolute; bottom: 150px; left: 50%; transform: translateX(-50%);
+  background: #000c; padding: 10px 18px; border-radius: 8px; max-width: 640px; font-size: 16px; line-height: 1.4; }
+#hud-dialog-name { color: #37e6c8; font-weight: 800; margin-right: 8px; }
+#hud-banner { display: none; position: absolute; top: 34%; left: 50%; transform: translateX(-50%);
+  font-size: 34px; font-weight: 900; color: #ffd76e; text-shadow: 0 3px 10px #000; letter-spacing: 1px; text-align: center; }
+#hud-bust { display: none; position: absolute; top: 44%; left: 50%; transform: translateX(-50%);
+  font-size: 30px; font-weight: 900; color: #ff4444; text-shadow: 0 3px 10px #000; }
+#hud-prompt { display: none; position: absolute; bottom: 110px; left: 50%; transform: translateX(-50%);
+  background: #37e6c8; color: #06281f; font-weight: 800; padding: 7px 16px; border-radius: 20px; font-size: 14px; }
+#hud-speed { display: none; position: absolute; bottom: 22px; right: 20px; text-align: right;
+  text-shadow: 0 2px 6px #000; }
+#hud-speed-value { font-size: 44px; font-weight: 900; }
+#hud-speed .unit { font-size: 14px; margin-left: 6px; }
+#hud-car-name { font-size: 14px; color: #ffd76e; font-weight: 700; }
+#hud-crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  font-size: 22px; color: #ffffffdd; text-shadow: 0 0 6px #000; }
+#minimap { position: absolute; bottom: 16px; left: 16px; width: 180px; height: 180px;
+  border: 2px solid #ffffff66; border-radius: 50%; background: #12261a; box-shadow: 0 4px 18px #000a; }
+#hud-controls { position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
+  font-size: 11px; color: #ffffff88; text-shadow: 0 1px 3px #000; white-space: nowrap; }
+
+/* ---- Screens ---- */
+.screen { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(180deg, #000a 0%, #0006 55%, #000c 100%); z-index: 10; }
+.panel { max-width: 680px; margin: 20px; padding: 34px 40px; text-align: center;
+  background: #0d1520e6; border: 1px solid #ffc93c55; border-radius: 14px; box-shadow: 0 10px 50px #000c; }
+.panel.small { max-width: 460px; }
+.kicker { color: #37e6c8; font-size: 12px; font-weight: 800; letter-spacing: 3px; }
+.panel h1 { margin: 8px 0 0; font-size: 58px; letter-spacing: 4px; color: #ffc93c;
+  text-shadow: 0 4px 0 #7a4a00, 0 8px 24px #000; }
+.panel h2 { margin: 0; font-size: 22px; color: #ff5da2; letter-spacing: 6px; font-weight: 600; }
+.story { font-size: 15px; line-height: 1.55; color: #e8ecf2; }
+.missions-preview { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: 14px 0; }
+.missions-preview span { background: #ffffff14; border: 1px solid #ffffff33; padding: 4px 10px;
+  border-radius: 12px; font-size: 12px; font-weight: 700; }
+.buttons { display: flex; gap: 10px; justify-content: center; margin-top: 18px; flex-wrap: wrap; }
+.buttons.col { flex-direction: column; align-items: stretch; }
+button { pointer-events: auto; cursor: pointer; font: inherit; font-weight: 800; color: #fff;
+  background: #ffffff22; border: 1px solid #ffffff55; border-radius: 8px; padding: 11px 20px; }
+button:hover { background: #ffffff33; }
+button.big { background: #ffc93c; color: #3a2500; border-color: #ffd76e; font-size: 17px; padding: 13px 26px; }
+button.big:hover { background: #ffd76e; }
+.controls { font-size: 13px; color: #ffffffb3; line-height: 1.6; }
+.fine { font-size: 11px; color: #ffffff77; }
+#end-title { color: #ff4444; }
