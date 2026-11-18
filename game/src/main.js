@@ -12,6 +12,8 @@ import { Police } from './police.js';
 import { Player } from './player.js';
 import { MissionEngine, MISSIONS, STORY_INTRO } from './missions.js';
 import { Activities } from './activities.js';
+import { Pickups } from './pickups.js';
+import { Upgrades } from './upgrades.js';
 import { Effects } from './effects.js';
 import { HUD } from './hud.js';
 import { AudioEngine } from './audio.js';
@@ -40,6 +42,7 @@ class Game {
     this.lastPedHit = 0;
     this.saveTimer = 0;
     this.storyShown = false;
+    this.upgrades = new Upgrades();
   }
 
   init() {
@@ -85,8 +88,9 @@ class Game {
 
     this.parkedCars = [];
     this.spawnParkedCars();
-    this.traffic.spawn(24, 0, 60);
-    this.peds.spawn(42, 0, 60);
+    this.traffic.spawn(28, 0, 60);
+    this.peds.spawn(48, 0, 60);
+    this.pickups = new Pickups(this.scene);
     this.player.setPosition(6, 72, 0);
     this.camYaw = 0;
 
@@ -198,6 +202,7 @@ class Game {
 
   startGame(fresh) {
     const save = fresh ? null : loadSave();
+    if (save) this.upgrades.load(save.upgrades);
     if (save) {
       this.cash = save.cash;
       this.rep = save.rep;
@@ -206,6 +211,7 @@ class Game {
       this.player.setPosition(save.playerX, save.playerZ, save.heading);
       if (save.carType) {
         const car = new Car(this.scene, save.carType, save.carX, save.carZ, save.carHeading);
+        this.upgrades.applyTo(car);
         this.parkedCars.push(car);
         this.player.enterCar(car);
       }
@@ -213,6 +219,7 @@ class Game {
       this.cash = ECONOMY.startCash;
       this.rep = 0;
       this.missionsDone = [];
+      this.upgrades = new Upgrades();
       this.player.setPosition(6, 72, 0);
     }
     document.getElementById('start-screen').classList.add('hidden');
@@ -247,6 +254,7 @@ class Game {
       carX: p.car ? p.car.x : 0, carZ: p.car ? p.car.z : 0,
       carHeading: p.car ? p.car.heading : 0,
       clockMinutes: this.clockMinutes,
+      upgrades: this.upgrades.save(),
     });
   }
 
@@ -335,6 +343,7 @@ class Game {
     } else {
       this.hud.toast('In the car — W/S to drive, Space to drift.', 2.5);
     }
+    this.upgrades.applyTo(car);
     p.enterCar(car);
   }
 
@@ -540,6 +549,24 @@ class Game {
       }
     }
 
+    if (input.wasPressed('KeyU') || input.wasPressed('KeyI')) {
+      const g = this.city.garage;
+      const inBay = p.car && p.car.speed < 3 && dist2D(p.x, p.z, g.x, g.z) < g.radius;
+      if (inBay) {
+        const kind = input.wasPressed('KeyU') ? 'engine' : 'armor';
+        const r = this.upgrades.buy(kind, this.cash);
+        if (r.ok) {
+          this.cash -= r.cost;
+          this.upgrades.applyTo(p.car);
+          this.hud.toast(r.msg, 3);
+        } else {
+          this.hud.toast(r.msg, 3);
+        }
+      } else if (p.car) {
+        this.hud.toast('Upgrades are fitted at Cross Motors — drive into the garage bay.', 3);
+      }
+    }
+    this.pickups.update(dt, this.ctx, this.time);
     this.traffic.update(dt, p, cars);
     this.peds.update(dt, p.x, p.z, p.car ? p.car.speed : p.onFootSpeed);
     this.police.update(dt, p);
@@ -621,6 +648,7 @@ class Game {
       traffic: this.traffic.cars,
       police: this.police.cars,
       coins: this.activities.coins,
+      pickups: this.pickups.items,
     });
   }
 }

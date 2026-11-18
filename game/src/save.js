@@ -11,6 +11,7 @@ export function defaultSave() {
     playerX: 6, playerZ: 72, heading: 0,
     carType: null, carX: 0, carZ: 0, carHeading: 0,
     clockMinutes: 18 * 60 + 47,
+    upgrades: { engine: 0, armor: 0 },
   };
 }
 

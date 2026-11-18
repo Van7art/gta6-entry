@@ -37,6 +37,13 @@ export class HUD {
     this.toastTimer = seconds || 4;
   }
 
+  // Screenshot scenes stage a live state: transient toasts must not linger
+  // in the shot (on slow software rendering a 2 s toast can outlive the wait).
+  clearToast() {
+    this.toastTimer = 0;
+    this.el.toast.classList.remove('show');
+  }
+
   update(dt, state) {
     // Wanted stars.
     if (state.stars !== this.lastStars) {
@@ -111,6 +118,13 @@ export class HUD {
       if (c.taken) continue;
       const [cx, cy] = toMap(c.x, c.z);
       ctx.fillRect(cx - 1.5, cy - 1.5, 3, 3);
+    }
+    // Pickups: health green, ammo orange.
+    for (const pk of state.pickups || []) {
+      if (pk.taken) continue;
+      const [kx, ky] = toMap(pk.x, pk.z);
+      ctx.fillStyle = pk.kind === 'health' ? '#2ecc71' : '#f39c12';
+      ctx.fillRect(kx - 2, ky - 2, 4, 4);
     }
     // Traffic dots.
     ctx.fillStyle = '#ffffff';

@@ -61,7 +61,7 @@ export const ECONOMY = {
   startCash: 150,
   repairCostPerHp: 2,
   coinValue: 50,
-  missionRewards: [400, 650, 900, 1200, 1500, 3000],
+  missionRewards: [400, 650, 900, 1200, 1500, 3000, 2000, 4000],
 };
 
 export const SAVE_KEY = 'porto-verde-save-v1';

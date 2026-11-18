@@ -5,91 +5,11 @@
 // the engine tracks the current step, spawns mission cars, fares and rival
 // crews, and pays out on completion.
 import * as THREE from 'three';
-import { ECONOMY } from './config.js';
 import { Car } from './vehicles.js';
 import { clamp, dist2D, formatCash, rand } from './util.js';
 
-export const STORY_INTRO =
-  'Porto Verde, 6:47 PM. Jax Moreno is back after five years away — his brother\'s ' +
-  'garage burned down, the debt collectors are circling, and the only person who ' +
-  'still answers his calls is Lena Cross, who runs Cross Motors and knows every ' +
-  'street in the city. Dante Ferreira owns the casinos, the docks and half the ' +
-  'cops. Jax is going to take it all back, one job at a time.';
-
-export const MISSIONS = [
-  {
-    id: 'first-gear', title: '1 · First Gear', reward: ECONOMY.missionRewards[0],
-    briefing: 'LENA: "Jax, you\'re back. My coupe is parked up the street — bring it to Cross Motors. Drive like you remember how."',
-    steps: [
-      { type: 'goto', x: 0, z: 66, label: 'Get to Lena\'s coupe' },
-      { type: 'enterVehicle', carId: 'lena-coupe', label: 'Get in the coupe' },
-      { type: 'driveTo', x: -90, z: 74, label: 'Drive to Cross Motors', radius: 10 },
-    ],
-  },
-  {
-    id: 'fare-game', title: '2 · Fare Game', reward: ECONOMY.missionRewards[1],
-    briefing: 'LENA: "The taxi game pays cash every night. Three fares, all over town. Don\'t keep them waiting — and don\'t wreck my cab."',
-    timeLimit: 300,
-    steps: [
-      { type: 'enterVehicle', carId: 'taxi', label: 'Get in the taxi' },
-      { type: 'pickup', x: 240, z: -60, label: 'Pick up the fare on Playa Dorada' },
-      { type: 'deliver', x: 0, z: -180, label: 'Drop the fare Downtown' },
-      { type: 'pickup', x: 60, z: 240, label: 'Pick up the fare at the Docks' },
-      { type: 'deliver', x: -180, z: 60, label: 'Drop the fare in Barrio Viejo' },
-      { type: 'pickup', x: 120, z: 120, label: 'Pick up the fare in Midtown' },
-      { type: 'deliver', x: -90, z: 74, label: 'Drop the fare at Cross Motors' },
-    ],
-  },
-  {
-    id: 'dockside-dash', title: '3 · Dockside Dash', reward: ECONOMY.missionRewards[2],
-    briefing: 'LENA: "Ferreira\'s boys left a box truck at the docks, full of casino chips. Take it. They\'ll shoot — shoot back or drive fast."',
-    steps: [
-      { type: 'goto', x: 60, z: 258, label: 'Get to the docks' },
-      { type: 'enterVehicle', carId: 'dock-truck', label: 'Steal the box truck', guards: 2, wantedOnEnter: 2 },
-      { type: 'driveTo', x: -90, z: 74, label: 'Lose the heat — deliver the truck to Cross Motors', radius: 10 },
-    ],
-  },
-  {
-    id: 'street-king', title: '4 · Street King', reward: ECONOMY.missionRewards[3],
-    briefing: 'LENA: "Tonight\'s street race decides who owns the night roads. Two rivals, eight gates. Beat them and the whole city will know your name."',
-    timeLimit: 180,
-    steps: [
-      { type: 'goto', x: 0, z: -240, label: 'Get to the start line, North Road' },
-      {
-        type: 'race', label: 'Race! Hit all 8 gates before your rivals',
-        checkpoints: [
-          { x: 0, z: -240 }, { x: 240, z: -240 }, { x: 240, z: 0 }, { x: 240, z: 240 },
-          { x: 0, z: 240 }, { x: -240, z: 240 }, { x: -240, z: 0 }, { x: -240, z: -240 },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'beach-run', title: '5 · Beach Run', reward: ECONOMY.missionRewards[4],
-    briefing: 'LENA: "A package is waiting on the beach. Ferreira\'s cops will be all over you the second you grab it. Two minutes, downtown. Go."',
-    timeLimit: 150,
-    steps: [
-      { type: 'goto', x: 305, z: 120, label: 'Grab the package on the beach', wantedOnStart: 3 },
-      { type: 'deliver', x: 0, z: -180, label: 'Deliver downtown — the heat is on!', radius: 12 },
-    ],
-  },
-  {
-    id: 'ferreira-job', title: '6 · The Ferreira Job', reward: ECONOMY.missionRewards[5],
-    briefing: 'LENA: "This is it. Ferreira\'s gold supercar is in his downtown garage. Take it, outrun everything, and bring it home. After this, Porto Verde is ours."',
-    steps: [
-      { type: 'goto', x: 60, z: -180, label: 'Get to Ferreira\'s downtown garage' },
-      { type: 'enterVehicle', carId: 'gold-car', label: 'Steal the gold supercar', guards: 3, wantedOnEnter: 4 },
-      { type: 'driveTo', x: -90, z: 74, label: 'Bring the gold car home to Cross Motors', radius: 10 },
-    ],
-  },
-];
-
-const MISSION_CARS = {
-  'lena-coupe': { type: 'sports', x: 0, z: 63.5, heading: 0, color: 0xd94f30 },
-  'taxi': { type: 'taxi', x: -90, z: 74, heading: Math.PI / 2, color: 0xf7c600 },
-  'dock-truck': { type: 'truck', x: 60, z: 270, heading: Math.PI, color: 0x2471a3 },
-  'gold-car': { type: 'sports', x: 60, z: -176, heading: Math.PI, color: 0xf7c600 },
-};
+import { STORY_INTRO, MISSIONS, MISSION_CARS } from './missions-data.js';
+export { STORY_INTRO, MISSIONS };
 
 // A rival crew member on foot: shoots at the player, can be shot.
 export class Enemy {
@@ -204,11 +124,21 @@ export class MissionEngine {
         ctx.toast('Ferreira\'s crew is guarding the car!', 4);
       }
     }
+    if (s.type === 'clearOut' && s.guards) {
+      for (let i = 0; i < s.guards; i++) {
+        const e = new Enemy(this.scene, s.x + rand(-10, 10), s.z + rand(-10, 10));
+        this.enemies.push(e);
+      }
+      ctx.toast('Ferreira\'s crew is here — clear them out!', 4);
+    }
     if (s.type === 'race') {
       this.raceCheckpoint = 0;
-      // Two rival racers line up at the start.
-      for (let i = 0; i < 2; i++) {
-        const rival = new Car(this.scene, 'sports', -6 + i * 12, -243.5, 0, [0x1abc9c, 0x9b59b6][i]);
+      // Rival racers line up at the start (two by default, more on convoy jobs).
+      const rivalCount = s.rivals || 2;
+      const rivalColors = [0x1abc9c, 0x9b59b6, 0xe67e22, 0x2471a3];
+      for (let i = 0; i < rivalCount; i++) {
+        const startCp = s.checkpoints[0];
+        const rival = new Car(this.scene, 'sports', startCp.x - 6 + i * 12, startCp.z - 2.5, 0, rivalColors[i % rivalColors.length]);
         rival.cruise = 30 + i * 2;
         rival.cp = 0;
         this.rivals.push(rival);
@@ -324,6 +254,12 @@ export class MissionEngine {
     this.updateMarker();
 
     switch (s.type) {
+      case 'clearOut':
+        if (this.enemies.length === 0) {
+          ctx.toast('Crew cleared — grab the van!', 3);
+          this.advance(ctx);
+        }
+        break;
       case 'goto':
         if (dist2D(p.x, p.z, s.x, s.z) < (s.radius || 5)) {
           if (s.wantedOnStart) ctx.police.setStars(s.wantedOnStart);
