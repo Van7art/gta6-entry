@@ -1,8 +1,11 @@
-// hud.js — the heads-up display: wanted stars, cash, street rep, health,
-// ammo, speedometer, mission objective, toasts, and the live minimap drawn
-// on a 2D canvas (roads, beach, water, traffic, police, mission marker).
+// hud.js — the heads-up display: wanted stars, cash, street rep + rank,
+// health, ammo, the weapon wheel, radio station, speedometer, mission
+// objective, toasts, and the live minimap drawn on a 2D canvas (roads,
+// beach, water, traffic, police, mission marker).
 import { CITY } from './config.js';
 import { formatCash } from './util.js';
+import { repLabel } from './progression.js';
+import { WEAPON_ORDER, WEAPONS } from './weapons.js';
 
 export class HUD {
   constructor() {
@@ -23,12 +26,29 @@ export class HUD {
       vignette: document.getElementById('vignette'),
       crosshair: document.getElementById('crosshair'),
       radio: document.getElementById('radio'),
+      airone: document.getElementById('airone'),
+      weaponWheel: document.getElementById('weapon-wheel'),
       minimap: document.getElementById('minimap'),
       missionTimer: document.getElementById('mission-timer'),
     };
     this.mapCtx = this.el.minimap.getContext('2d');
     this.toastTimer = 0;
     this.lastStars = -1;
+    this.lastWeapon = '';
+    this.lastStation = '';
+    // Build the three weapon-wheel slots once.
+    if (this.el.weaponWheel) {
+      this.el.weaponWheel.innerHTML = '';
+      this.wheelSlots = {};
+      for (const key of WEAPON_ORDER) {
+        const s = document.createElement('div');
+        s.className = 'wheel-slot';
+        s.id = 'wheel-' + key;
+        s.textContent = WEAPONS[key].name;
+        this.el.weaponWheel.appendChild(s);
+        this.wheelSlots[key] = s;
+      }
+    }
   }
 
   toast(text, seconds) {
@@ -54,8 +74,27 @@ export class HUD {
       this.el.stars.classList.toggle('hot', state.stars >= 3);
     }
     this.el.cash.textContent = formatCash(state.cash);
-    this.el.rep.textContent = 'REP ' + state.rep;
+    this.el.rep.textContent = repLabel(state.rep);
     this.el.clock.textContent = state.clock;
+    if (this.el.airone) {
+      this.el.airone.textContent = state.airOne ? '🚁 AIR ONE OVERHEAD' : '';
+      this.el.airone.style.display = state.airOne ? 'block' : 'none';
+    }
+    if (this.el.radio && state.stationName && state.stationName !== this.lastStation) {
+      this.lastStation = state.stationName;
+      this.el.radio.textContent = '♪ ' + state.stationName;
+    }
+    if (this.wheelSlots && state.weapon) {
+      if (state.weapon !== this.lastWeapon) {
+        this.lastWeapon = state.weapon;
+        for (const key of WEAPON_ORDER) this.wheelSlots[key].classList.toggle('active', key === state.weapon);
+      }
+      for (const key of WEAPON_ORDER) {
+        const mag = state.weaponMags ? state.weaponMags[key] : 0;
+        this.wheelSlots[key].textContent = WEAPONS[key].name + ' ' + mag;
+      }
+      this.el.weaponWheel.style.display = state.inCar ? 'none' : 'flex';
+    }
     this.el.healthFill.style.width = state.health + '%';
     this.el.healthFill.classList.toggle('low', state.health < 30);
     this.el.healthText.textContent = Math.ceil(state.health) + ' HP';

@@ -53,6 +53,7 @@ export function makeCarMesh(type, colorHex) {
     if (isSports) {
       const spoiler = box(0.18, 0.08, width * 0.95, 0x111111, -length / 2 + 0.15, 1.35, 0);
       group.add(spoiler);
+      group.userData.builtInSpoiler = spoiler;
     }
     if (type === 'taxi') {
       group.children[0].material = new THREE.MeshLambertMaterial({ color: 0xf7c600 });
@@ -96,6 +97,8 @@ export function makeCarMesh(type, colorHex) {
   group.userData.length = length;
   group.userData.width = width;
   group.userData.type = type;
+  group.userData.body = group.children[0];
+  group.userData.spoilerMesh = null;
   return group;
 }
 
@@ -116,6 +119,7 @@ export class Car {
     this.drifting = false;
     this.velX = 0; this.velZ = 0;
     this.smokeTimer = 0;
+    this.slowTimer = 0; // spike-strip tyre blow-out: top speed capped while > 0
     this.scene = scene;
   }
 
@@ -125,16 +129,48 @@ export class Car {
   // Forward unit vector in the XZ plane.
   forward() { return { x: Math.cos(this.heading), z: -Math.sin(this.heading) }; }
 
+  // Spike strip: blow the tyres for `seconds` (top speed capped at 55%).
+  burstTires(seconds) { this.slowTimer = Math.max(this.slowTimer, seconds || 8); }
+
+  // Garage visuals: repaint the body, swap wheel style, fit/remove spoiler.
+  // Police cruisers keep their livery.
+  applyVisual(paintHex, wheelsName, spoilerOn) {
+    const u = this.mesh.userData;
+    if (this.type !== 'police' && u.body && u.body.material) {
+      u.body.material.color.setHex(paintHex);
+    }
+    const wheelColors = { Standard: 0x141414, Sport: 0x888888, Chrome: 0xd8d8d8 };
+    const wc = wheelColors[wheelsName] !== undefined ? wheelColors[wheelsName] : 0x141414;
+    for (const w of u.wheels) w.material.color.setHex(wc);
+    if (u.builtInSpoiler) u.builtInSpoiler.visible = !!spoilerOn || this.type === 'sports';
+    if (spoilerOn && !u.builtInSpoiler && !u.spoilerMesh) {
+      const len = u.length, wid = u.width;
+      const sp = new THREE.Mesh(
+        new THREE.BoxGeometry(0.18, 0.08, wid * 0.95),
+        new THREE.MeshLambertMaterial({ color: 0x111111 })
+      );
+      sp.position.set(-len / 2 + 0.15, 1.35, 0);
+      this.mesh.add(sp);
+      u.spoilerMesh = sp;
+    }
+    if (!spoilerOn && u.spoilerMesh) {
+      this.mesh.remove(u.spoilerMesh);
+      u.spoilerMesh = null;
+    }
+  }
+
   // Arcade step. input: {throttle -1..1, steer -1..1, handbrake bool}.
   // surface: 1 on road, lower off-road. Returns impact info for sound/fx.
   step(dt, input, city, surface) {
     if (this.dead) return null;
     const st = this.stats;
+    this.slowTimer = Math.max(0, this.slowTimer - dt);
+    const effMax = st.maxSpeed * (this.slowTimer > 0 ? 0.55 : 1);
     const fwd = this.forward();
     const forwardSpeed = this.velX * fwd.x + this.velZ * fwd.z;
     // Engine / brake.
     if (input.throttle > 0) {
-      const accel = st.accel * surface * (1 - clamp(forwardSpeed / st.maxSpeed, 0, 1) * 0.85);
+      const accel = st.accel * surface * (1 - clamp(forwardSpeed / effMax, 0, 1) * 0.85);
       this.velX += fwd.x * accel * input.throttle * dt;
       this.velZ += fwd.z * accel * input.throttle * dt;
     } else if (input.throttle < 0) {
@@ -151,7 +187,7 @@ export class Car {
     }
     // Steering: stronger at low speed, weaker at top speed.
     const speedAbs = Math.hypot(this.velX, this.velZ);
-    const steerAuthority = clamp(speedAbs / 8, 0, 1) * (1 - clamp(speedAbs / st.maxSpeed, 0, 1) * 0.55);
+    const steerAuthority = clamp(speedAbs / 8, 0, 1) * (1 - clamp(speedAbs / effMax, 0, 1) * 0.55);
     const steerTarget = input.steer * st.turn * steerAuthority;
     this.steer = lerp(this.steer, steerTarget, 1 - Math.exp(-8 * dt));
     const dir = forwardSpeed >= 0 ? 1 : -1;
@@ -167,10 +203,10 @@ export class Car {
     // Drag + rolling resistance.
     const drag = Math.exp(-(0.35 + (input.throttle === 0 ? 0.9 : 0)) * dt);
     this.velX *= drag; this.velZ *= drag;
-    // Clamp speeds.
+    // Clamp speeds (blown tyres cap the top speed hard).
     const f2 = this.velX * nf.x + this.velZ * nf.z;
-    if (f2 > st.maxSpeed * 1.15) {
-      const k = (st.maxSpeed * 1.15) / f2;
+    if (f2 > effMax * 1.15) {
+      const k = (effMax * 1.15) / f2;
       this.velX *= k; this.velZ *= k;
     }
     if (f2 < -st.maxReverse) {

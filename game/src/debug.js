@@ -1,5 +1,5 @@
 // debug.js — screenshot scene setup. Reads URL parameters (?autostart=1,
-// ?scene=chase|drive|race|foot|beach) and arranges a real, playable state
+// ?scene=chase|drive|garage|foot|race|taxi|harbour) and arranges a real,
 // of the game so the screenshots show live systems. This only ever drives
 // the game's own public actions — no fake rendering.
 import { Car } from './vehicles.js';
@@ -9,15 +9,21 @@ export function applyDebugScene(game, params) {
   if (!scene) return;
   const { player, police, missions, traffic, peds, city } = game;
   if (scene === 'chase') {
-    // Player in a sports car, 3-star heat, cruisers closing in from ahead
-    // (visible in the chase camera) and behind. East of the park so the
-    // chase stays on the road.
+    // Cover shot: 5-star heat — Air One overhead with its searchlight,
+    // a roadblock across the road ahead, a spike strip, cruisers closing
+    // in, mission in progress, STREET KING rep and the radio on.
     const car = new Car(game.scene, 'sports', 60, 3.5, 0, 0xd94f30);
     game.parkedCars.push(car);
     player.setPosition(60, 3.5, 0);
     player.enterCar(car);
     car.velX = 18; car.velZ = 0;
-    police.setStars(3);
+    game.cash = 5200;
+    game.rep = 120; // STREET KING
+    game.audio.setStation(1); // PLAYA 104
+    police.setStars(5);
+    police.spawnHeli(player);
+    police.spawnRoadblock(player, 40);
+    police.spawnSpikeStrip(player);
     const c1 = new Car(game.scene, 'police', 95, 3.5, Math.PI);
     const c2 = new Car(game.scene, 'police', 115, -3.5, Math.PI);
     const c3 = new Car(game.scene, 'police', 35, -3.5, 0);
@@ -26,6 +32,26 @@ export function applyDebugScene(game, params) {
     // A mission in progress as well, so the HUD shows a live objective and
     // timer next to the wanted stars: chase + mission + minimap in one shot.
     missions.start(4, game.ctx);
+  } else if (scene === 'garage') {
+    // Garage shop shot: the player's gold sports car (Chrome wheels,
+    // spoiler, engine + armour stage 3) parked in the Cross Motors bay
+    // with the full shop panel open — cash + STREET KING visible.
+    game.cash = 8500;
+    game.rep = 120; // STREET KING
+    game.upgrades.levels.engine = 2;
+    game.upgrades.levels.armor = 2;
+    game.upgrades.paint = 'Taxi Gold';
+    game.upgrades.ownedPaints.push('Taxi Gold');
+    game.upgrades.wheels = 'Chrome';
+    game.upgrades.spoiler = true;
+    const car = new Car(game.scene, 'sports', -90, 86, Math.PI / 2, 0xf1c40f);
+    game.upgrades.applyTo(car);
+    car.hp = car.stats.hp; // full health, so no auto-repair toast/$200 in shot
+    game.parkedCars.push(car);
+    player.setPosition(-90, 86, Math.PI / 2);
+    player.enterCar(car);
+    game.camYaw = Math.PI / 2;
+    game.openGarage();
   } else if (scene === 'drive') {
     // Cruising east through Downtown on the -120 road, tall towers around.
     const car = new Car(game.scene, 'sports', -60, -116.5, 0, 0x2e86c1);
@@ -58,6 +84,10 @@ export function applyDebugScene(game, params) {
   } else if (scene === 'foot') {
     // Mid-sand, facing east toward the sea: peds, umbrellas and the water
     // in frame, the boardwalk wall behind the camera instead of in the shot.
+    // HUD shows STREET KING rep, DOCK RADIO and the weapon wheel on SHOTGUN.
+    game.rep = 120; // STREET KING
+    game.audio.setStation(2); // DOCK RADIO
+    player.selectWeapon('shotgun');
     player.setPosition(310, 60, 0);
     game.camYaw = -0.7;
     for (const [px, pz] of [[316, 42], [318, 58], [314, 74], [320, 88]]) {

@@ -13,7 +13,9 @@ import { Player } from './player.js';
 import { MissionEngine, MISSIONS, STORY_INTRO } from './missions.js';
 import { Activities } from './activities.js';
 import { Pickups } from './pickups.js';
-import { Upgrades } from './upgrades.js';
+import { Upgrades, UPGRADE_DEFS, PAINTS, WHEELS, SPOILER } from './upgrades.js';
+import { rankFor } from './progression.js';
+import { WEAPON_ORDER, defaultWeaponState } from './weapons.js';
 import { Effects } from './effects.js';
 import { HUD } from './hud.js';
 import { AudioEngine } from './audio.js';
@@ -43,6 +45,7 @@ class Game {
     this.saveTimer = 0;
     this.storyShown = false;
     this.upgrades = new Upgrades();
+    this.garageOpen = false;
   }
 
   init() {
@@ -114,6 +117,19 @@ class Game {
       this.fx.sparks(impact.x, 0.8, impact.z);
       this.audio.crash(impact.strength);
     };
+    // Air One opens fire from above: tracer + damage + shake.
+    this.police.onHeliShot = (player, heliPos) => {
+      this.fx.tracer(heliPos.x, 20, heliPos.z, player.x, 1.2, player.z, 0xff5533);
+      this.audio.gunshot();
+      if (player.car) { player.car.damage(4); this.fx.sparks(player.car.x, 1, player.car.z); }
+      else player.damage(6);
+      this.shake = Math.max(this.shake, 0.12);
+    };
+    this.police.onSpikeHit = () => {
+      this.hud.toast('Spike strip! Tyres blown — top speed capped.', 4);
+      this.audio.crash(0.8);
+      this.shake = 0.5;
+    };
     this.missions.onComplete = (m) => {
       this.missionsDone.push(m.id);
       this.saveGame();
@@ -142,6 +158,7 @@ class Game {
     for (const c of this.traffic.cars) add(c);
     for (const c of this.parkedCars) add(c);
     for (const c of this.police.cars) add(c);
+    for (const c of this.police.roadblockCars()) add(c);
     for (const c of Object.values(this.missions.missionCars)) add(c);
     for (const c of this.missions.rivals) add(c);
     if (this.player.car) add(this.player.car);
@@ -178,6 +195,13 @@ class Game {
       this.audio.setMuted(!this.audio.muted);
       $('btn-mute').textContent = this.audio.muted ? 'Unmute (M)' : 'Mute (M)';
     });
+    // Clicking the radio label cycles stations (Q does the same).
+    $('radio').addEventListener('click', () => {
+      const name = this.audio.nextStation();
+      this.saveGame();
+      this.hud.toast('♪ ' + name, 2);
+    });
+    $('btn-garage-close').addEventListener('click', () => this.closeGarage());
     // Mission list in the pause menu.
     const list = $('mission-list');
     list.innerHTML = '';
@@ -208,6 +232,9 @@ class Game {
       this.rep = save.rep;
       this.missionsDone = save.missionsDone.slice();
       this.clockMinutes = save.clockMinutes;
+      this.player.loadWeapons(save.weapons);
+      this.audio.setStation(save.settings ? save.settings.station : 0);
+      this.audio.setMuted(save.settings ? !!save.settings.muted : false);
       this.player.setPosition(save.playerX, save.playerZ, save.heading);
       if (save.carType) {
         const car = new Car(this.scene, save.carType, save.carX, save.carZ, save.carHeading);
@@ -220,6 +247,8 @@ class Game {
       this.rep = 0;
       this.missionsDone = [];
       this.upgrades = new Upgrades();
+      this.player.loadWeapons(defaultWeaponState());
+      this.audio.setStation(0);
       this.player.setPosition(6, 72, 0);
     }
     document.getElementById('start-screen').classList.add('hidden');
@@ -255,7 +284,101 @@ class Game {
       carHeading: p.car ? p.car.heading : 0,
       clockMinutes: this.clockMinutes,
       upgrades: this.upgrades.save(),
+      weapons: this.player.saveWeapons(),
+      settings: { station: this.audio.station, muted: this.audio.muted },
     });
+  }
+
+  // --- Cross Motors garage shop -------------------------------------------
+  inGarageBay() {
+    const p = this.player;
+    const g = this.city.garage;
+    return !!p.car && p.car.speed < 3 && dist2D(p.x, p.z, g.x, g.z) < g.radius;
+  }
+
+  openGarage() {
+    if (this.state !== 'playing') return false;
+    if (!this.inGarageBay()) {
+      this.hud.toast(this.player.car ? 'Upgrades are fitted at Cross Motors — drive into the garage bay.' : 'You need a car for the Cross Motors shop.', 3);
+      return false;
+    }
+    this.garageOpen = true;
+    this.renderGarageShop();
+    document.getElementById('garage-screen').classList.remove('hidden');
+    return true;
+  }
+
+  closeGarage() {
+    this.garageOpen = false;
+    document.getElementById('garage-screen').classList.add('hidden');
+  }
+
+  // Apply a shop purchase result: charge, re-apply to the car, save, refresh.
+  applyShopResult(r) {
+    if (r.ok) {
+      if (r.cost) this.cash -= r.cost;
+      if (this.player.car) this.upgrades.applyTo(this.player.car);
+      this.saveGame();
+    }
+    this.hud.toast(r.msg, 3);
+    if (this.garageOpen) this.renderGarageShop();
+    return r.ok;
+  }
+
+  renderGarageShop() {
+    const $ = (id) => document.getElementById(id);
+    $('garage-cash').textContent = formatCash(this.cash) + ' · ' + rankFor(this.rep);
+    const up = this.upgrades;
+    const mkBtn = (label, sub, disabled, fn) => {
+      const b = document.createElement('button');
+      b.className = 'menu-btn shop-btn';
+      b.innerHTML = label + (sub ? '<br><span class="shop-sub">' + sub + '</span>' : '');
+      if (disabled) b.disabled = true;
+      b.addEventListener('click', fn);
+      return b;
+    };
+    const perf = $('shop-performance');
+    perf.innerHTML = '';
+    for (const kind of ['engine', 'armor']) {
+      const def = UPGRADE_DEFS[kind];
+      const lvl = up.levels[kind];
+      const cost = up.nextCost(kind);
+      const lock = up.lockFor(kind, this.rep);
+      const label = def.label + ' · Stage ' + lvl + '/3';
+      const sub = cost === null ? 'MAXED OUT' : lock ? '🔒 needs ' + lock : 'Stage ' + (lvl + 1) + ' — $' + cost + ' (' + def.bonus + ')';
+      perf.appendChild(mkBtn(label, sub, cost === null || !!lock, () => this.applyShopResult(up.buy(kind, this.cash, this.rep))));
+    }
+    const paint = $('shop-paint');
+    paint.innerHTML = '';
+    for (const p of PAINTS) {
+      const owned = up.ownedPaints.includes(p.name);
+      const cur = up.paint === p.name;
+      const b = mkBtn(
+        (cur ? '✓ ' : '') + p.name,
+        owned ? (cur ? 'FITTED' : 'Owned — click to fit') : '$' + p.cost,
+        false,
+        () => this.applyShopResult(up.buyPaint(p.name, this.cash))
+      );
+      b.style.borderLeft = '6px solid #' + p.hex.toString(16).padStart(6, '0');
+      paint.appendChild(b);
+    }
+    const wheels = $('shop-wheels');
+    wheels.innerHTML = '';
+    for (const w of WHEELS) {
+      const locked = this.rep < w.lockRep;
+      const sub = this.upgrades.wheels === w.name ? 'FITTED' : locked ? '🔒 needs ' + w.lockRank : '$' + w.cost;
+      wheels.appendChild(mkBtn(w.name + ' Wheels', sub, locked || this.upgrades.wheels === w.name,
+        () => this.applyShopResult(up.buyWheels(w.name, this.cash, this.rep))));
+    }
+    const vis = $('shop-visual');
+    vis.innerHTML = '';
+    const spLocked = this.rep < SPOILER.lockRep;
+    vis.appendChild(mkBtn(
+      'Rear Spoiler',
+      up.spoiler ? 'FITTED — click to remove' : spLocked ? '🔒 needs ' + SPOILER.lockRank : '$' + SPOILER.cost,
+      spLocked && !up.spoiler,
+      () => this.applyShopResult(up.spoiler ? up.removeSpoiler() : up.buySpoiler(this.cash, this.rep))
+    ));
   }
 
   onBusted() {
@@ -408,6 +531,21 @@ class Game {
     if (input.wasPressed('Digit1')) this.audio.setStation(0);
     if (input.wasPressed('Digit2')) this.audio.setStation(1);
     if (input.wasPressed('Digit3')) this.audio.setStation(2);
+    if (input.wasPressed('KeyQ') && this.state === 'playing') {
+      const name = this.audio.nextStation();
+      this.hud.toast('♪ ' + name, 2);
+      this.saveGame();
+    }
+    // Weapon wheel: 4/5/6 pick a slot, C cycles.
+    if (this.state === 'playing' && !this.player.inCar) {
+      if (input.wasPressed('Digit4') && this.player.selectWeapon('pistol')) this.hud.toast('PISTOL — ' + this.player.ammo + ' in the mag', 1.5);
+      if (input.wasPressed('Digit5') && this.player.selectWeapon('smg')) this.hud.toast('SMG — ' + this.player.ammo + ' in the mag', 1.5);
+      if (input.wasPressed('Digit6') && this.player.selectWeapon('shotgun')) this.hud.toast('SHOTGUN — ' + this.player.ammo + ' in the mag', 1.5);
+      if (input.wasPressed('KeyC')) {
+        this.player.cycleWeapon();
+        this.hud.toast(this.player.weaponName() + ' — ' + this.player.ammo + ' in the mag', 1.5);
+      }
+    }
     if (input.wasPressed('KeyN') && this.state === 'playing' && !this.missions.active) {
       const next = MISSIONS.findIndex(m => !this.missionsDone.includes(m.id));
       if (next >= 0) this.missions.start(next, this.ctx);
@@ -554,17 +692,14 @@ class Game {
       const inBay = p.car && p.car.speed < 3 && dist2D(p.x, p.z, g.x, g.z) < g.radius;
       if (inBay) {
         const kind = input.wasPressed('KeyU') ? 'engine' : 'armor';
-        const r = this.upgrades.buy(kind, this.cash);
-        if (r.ok) {
-          this.cash -= r.cost;
-          this.upgrades.applyTo(p.car);
-          this.hud.toast(r.msg, 3);
-        } else {
-          this.hud.toast(r.msg, 3);
-        }
+        this.applyShopResult(this.upgrades.buy(kind, this.cash, this.rep));
       } else if (p.car) {
         this.hud.toast('Upgrades are fitted at Cross Motors — drive into the garage bay.', 3);
       }
+    }
+    if (input.wasPressed('KeyG')) {
+      if (this.garageOpen) this.closeGarage();
+      else this.openGarage();
     }
     this.pickups.update(dt, this.ctx, this.time);
     this.traffic.update(dt, p, cars);
@@ -637,6 +772,10 @@ class Game {
       ammo: p.ammo,
       ammoReserve: p.ammoReserve,
       reloading: p.reloadTimer > 0,
+      weapon: p.weapon,
+      weaponMags: p.mags,
+      stationName: this.audio.stationName(),
+      airOne: this.police.heliActive,
       speed: p.car ? p.car.speed : 0,
       inCar: !!p.car,
       carHp: p.car ? (p.car.hp / p.car.stats.hp) * 100 : 100,

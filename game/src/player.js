@@ -1,9 +1,11 @@
 // player.js — Jax Moreno on foot: walking, sprinting, entering and leaving
-// cars, and combat (pistol with ammo + reload, and a punch). The player is a
-// simple figure with a visible pistol; shots are hitscan with a tracer.
+// cars, and combat with the weapon wheel (pistol / SMG / shotgun, keys
+// 4/5/6 or C to cycle). The player is a simple figure with a visible gun;
+// shots are hitscan with a tracer.
 import * as THREE from 'three';
 import { PLAYER_STATS } from './config.js';
-import { clamp, dist2D, lerpAngle } from './util.js';
+import { WEAPONS, WEAPON_ORDER, weaponDef, defaultWeaponState } from './weapons.js';
+import { clamp, dist2D, lerpAngle, rand } from './util.js';
 
 function makePlayerMesh() {
   const g = new THREE.Group();
@@ -36,7 +38,10 @@ export class Player {
     this.x = 0; this.z = 30;
     this.heading = 0;
     this.health = PLAYER_STATS.health;
-    this.ammo = PLAYER_STATS.pistolAmmo;
+    // Weapon wheel: one shared reserve, a magazine per slot.
+    this.weapon = 'pistol';
+    this.mags = { pistol: WEAPONS.pistol.mag, smg: WEAPONS.smg.mag, shotgun: WEAPONS.shotgun.mag };
+    this.ammo = WEAPONS.pistol.mag;
     this.ammoReserve = 60;
     this.onFootSpeed = 0;
     this.car = null; // Car instance when driving, else null
@@ -49,6 +54,43 @@ export class Player {
   }
 
   get inCar() { return !!this.car; }
+
+  // Weapon wheel state for the save file.
+  saveWeapons() {
+    this.mags[this.weapon] = this.ammo;
+    return { current: this.weapon, mags: { ...this.mags }, reserve: this.ammoReserve };
+  }
+
+  loadWeapons(saved) {
+    if (!saved) return;
+    const base = defaultWeaponState();
+    const mags = { ...base.mags, ...(saved.mags || {}) };
+    this.mags = mags;
+    this.ammoReserve = typeof saved.reserve === 'number' ? saved.reserve : base.reserve;
+    this.selectWeapon(saved.current || 'pistol');
+  }
+
+  selectWeapon(key) {
+    if (!WEAPONS[key]) return false;
+    this.mags[this.weapon] = this.ammo;
+    this.weapon = key;
+    this.ammo = this.mags[key];
+    this.reloadTimer = 0;
+    // The held gun visibly changes: SMG long, shotgun thick.
+    const gun = this.mesh.userData.gun;
+    if (gun) {
+      const s = key === 'smg' ? [1, 1, 1.6] : key === 'shotgun' ? [1.8, 1.4, 2.0] : [1, 1, 1];
+      gun.scale.set(s[0], s[1], s[2]);
+    }
+    return true;
+  }
+
+  cycleWeapon() {
+    const i = WEAPON_ORDER.indexOf(this.weapon);
+    return this.selectWeapon(WEAPON_ORDER[(i + 1) % WEAPON_ORDER.length]);
+  }
+
+  weaponName() { return weaponDef(this.weapon).name; }
 
   setPosition(x, z, heading) {
     this.x = x; this.z = z;
@@ -84,7 +126,7 @@ export class Player {
     if (this.reloadTimer > 0) {
       this.reloadTimer -= dt;
       if (this.reloadTimer <= 0 && this.ammoReserve > 0) {
-        const need = PLAYER_STATS.pistolAmmo - this.ammo;
+        const need = weaponDef(this.weapon).mag - this.ammo;
         const take = Math.min(need, this.ammoReserve);
         this.ammo += take;
         this.ammoReserve -= take;
@@ -120,7 +162,7 @@ export class Player {
   }
 
   reload() {
-    if (this.reloadTimer <= 0 && this.ammo < PLAYER_STATS.pistolAmmo && this.ammoReserve > 0) {
+    if (this.reloadTimer <= 0 && this.ammo < weaponDef(this.weapon).mag && this.ammoReserve > 0) {
       this.reloadTimer = 1.1;
       return true;
     }
@@ -128,30 +170,40 @@ export class Player {
   }
 
   // Hitscan shot toward a world point. targets: [{x,z,radius,hit(dmg)}].
+  // The shotgun fires five pellets with spread; the SMG fires fast.
   // Returns {hitX,hitZ,hit} for the tracer / impact fx.
   shoot(targetPoint, targets) {
     if (this.shootCooldown > 0 || this.reloadTimer > 0 || this.ammo <= 0) return null;
+    const w = weaponDef(this.weapon);
     this.ammo--;
-    this.shootCooldown = 0.28;
+    this.shootCooldown = w.cooldown;
     const ox = this.x, oz = this.z;
-    const dx = targetPoint.x - ox, dz = targetPoint.z - oz;
-    const len = Math.hypot(dx, dz) || 1;
-    const ux = dx / len, uz = dz / len;
-    let bestDist = Math.min(len, PLAYER_STATS.pistolRange);
-    let best = null;
-    for (const t of targets) {
-      const tx = t.x - ox, tz = t.z - oz;
-      const along = tx * ux + tz * uz;
-      if (along < 0 || along > PLAYER_STATS.pistolRange) continue;
-      const perp = Math.abs(tx * (-uz) + tz * ux);
-      if (perp < (t.radius || 1) + 0.4) {
-        if (along < bestDist) { bestDist = along; best = t; }
+    let bestHit = null, bestDist = Infinity, bestEnd = null;
+    for (let p = 0; p < w.pellets; p++) {
+      const a = Math.atan2(-(targetPoint.z - oz), targetPoint.x - ox) + rand(-w.spread, w.spread);
+      const ux = Math.cos(a), uz = -Math.sin(a);
+      const len = Math.hypot(targetPoint.x - ox, targetPoint.z - oz) || 1;
+      let bDist = Math.min(len, w.range);
+      let best = null;
+      for (const t of targets) {
+        const tx = t.x - ox, tz = t.z - oz;
+        const along = tx * ux + tz * uz;
+        if (along < 0 || along > w.range) continue;
+        const perp = Math.abs(tx * (-uz) + tz * ux);
+        if (perp < (t.radius || 1) + 0.4) {
+          if (along < bDist) { bDist = along; best = t; }
+        }
+      }
+      if (best) {
+        best.hit(w.damage);
+        if (bDist < bestDist) { bestDist = bDist; bestHit = best; bestEnd = { x: ox + ux * bDist, z: oz + uz * bDist }; }
+      } else if (!bestEnd) {
+        bestEnd = { x: ox + ux * bDist, z: oz + uz * bDist };
       }
     }
-    const hitX = ox + ux * bestDist;
-    const hitZ = oz + uz * bestDist;
-    if (best) best.hit(PLAYER_STATS.pistolDamage);
-    return { hitX, hitZ, hit: !!best };
+    const hitX = bestEnd ? bestEnd.x : ox;
+    const hitZ = bestEnd ? bestEnd.z : oz;
+    return { hitX, hitZ, hit: !!bestHit };
   }
 
   enterCar(car) {

@@ -17,8 +17,9 @@
 <div id="hud" class="hidden">
   <div id="top-left">
     <div id="stars">☆☆☆☆☆</div>
+    <div id="airone"></div>
     <div id="cash">$150</div>
-    <div id="rep">REP 0</div>
+    <div id="rep">REP 0 · ROOKIE</div>
     <div id="clock">18:47</div>
   </div>
   <div id="top-right">
@@ -34,13 +35,14 @@
     <div id="health-bar"><div id="health-fill"></div></div>
     <div id="health-text">100 HP</div>
     <div id="ammo"></div>
+    <div id="weapon-wheel"></div>
   </div>
   <div id="bottom-right">
     <div id="speed">0</div>
     <div id="speed-unit">km/h</div>
     <div id="car-hp"></div>
   </div>
-  <div id="controls-hint">WASD drive / walk · E enter car · Space drift · Mouse drag camera · Click shoot · R reload / reset car · F punch · H horn · N next job · U engine / I armour (in garage) · 1-3 radio · M mute · Esc pause</div>
+  <div id="controls-hint">WASD drive / walk · E enter car · Space drift · Mouse drag camera · Click shoot · R reload / reset car · F punch · H horn · N next job · G garage shop (in bay) · U engine / I armour · Q / 1-3 radio · 4-6 / C weapons · M mute · Esc pause</div>
   <div id="crosshair">+</div>
   <div id="toast"></div>
   <div id="vignette"></div>
@@ -68,7 +70,9 @@
       <div><b>F</b> punch</div>
       <div><b>N</b> next job</div>
       <div><b>U / I</b> garage upgrades</div>
-      <div><b>H</b> horn · <b>1-3</b> radio · <b>M</b> mute</div>
+      <div><b>G</b> garage shop (in bay)</div>
+      <div><b>Q / 1-3</b> radio · <b>M</b> mute</div>
+      <div><b>4-6 / C</b> weapon wheel</div>
       <div><b>Esc</b> pause / save</div>
     </div>
     <p class="fine">A fully original game. Porto Verde, Jax Moreno, Lena Cross and Dante Ferreira are invented for this game — no Rockstar / GTA names, art or music. All sound is synthesized live.</p>
@@ -108,6 +112,26 @@
     <p class="tagline">Jax went down in the streets of Porto Verde.</p>
     <p>Hospital bill: $200. The city is still yours to take back.</p>
     <button id="btn-dead" class="menu-btn big">Get back up</button>
+  </div>
+</div>
+
+<!-- Cross Motors garage shop -->
+<div id="garage-screen" class="screen hidden">
+  <div class="panel shop-panel">
+    <h1 class="gold">CROSS MOTORS</h1>
+    <p class="tagline">Full garage shop — performance, paint, wheels, spoiler. Respect unlocks the good stock.</p>
+    <p id="garage-cash" class="save-info"></p>
+    <h3>Performance</h3>
+    <div id="shop-performance" class="btn-col"></div>
+    <h3>Paint</h3>
+    <div id="shop-paint" class="btn-col"></div>
+    <h3>Wheels</h3>
+    <div id="shop-wheels" class="btn-col"></div>
+    <h3>Visual</h3>
+    <div id="shop-visual" class="btn-col"></div>
+    <div class="btn-row" style="margin-top:16px">
+      <button id="btn-garage-close" class="menu-btn big">Done (G)</button>
+    </div>
   </div>
 </div>
 

@@ -9,6 +9,8 @@ const STATIONS = [
   { name: 'DOCK RADIO · Night Shift', bpm: 80, root: 49, minor: true, wave: 'square' },
 ];
 
+export const STATION_NAMES = STATIONS.map((s) => s.name);
+
 export class AudioEngine {
   constructor() {
     this.ctx = null;
@@ -55,6 +57,14 @@ export class AudioEngine {
     this.station = ((i % STATIONS.length) + STATIONS.length) % STATIONS.length;
     if (this.radioLabel) this.radioLabel.textContent = '♪ ' + STATIONS[this.station].name;
   }
+
+  // Q key / clicking the radio label: cycle to the next station.
+  nextStation() {
+    this.setStation(this.station + 1);
+    return STATIONS[this.station].name;
+  }
+
+  stationName() { return STATIONS[this.station].name; }
 
   buildEngine() {
     const c = this.ctx;
