@@ -1,330 +1,195 @@
-// missions.js — the story of Porto Verde and the mission engine. Six chained
-// driving jobs for Lena Cross, from a first delivery to stealing Dante
-// Ferreira's gold supercar. Each mission is a list of steps (go to, enter a
-// car, pick up a fare, race checkpoints, fight guards, escape the heat);
-// the engine tracks the current step, spawns mission cars, fares and rival
-// crews, and pays out on completion.
-import * as THREE from 'three';
-import { Car } from './vehicles.js';
-import { clamp, dist2D, formatCash, rand } from './util.js';
+// Eight chained story jobs from Mara Voss. Each mission is a small state machine:
+// setup places its target, update checks progress, complete pays out (+25 REP).
+import { GARAGE_POS } from './state.js';
+import { dist } from './util.js';
+import { collideBuildings } from './city.js';
+import { makeCar, damageCar } from './vehicles.js';
+import { rankFor } from './state.js';
 
-import { STORY_INTRO, MISSIONS, MISSION_CARS } from './missions-data.js';
-export { STORY_INTRO, MISSIONS };
+export const MISSION_DEFS = [
+  { title: '1 · First Keys', brief: 'Steal any car and bring it to Cross Motors.', pay: 150 },
+  { title: '2 · Beach Run', brief: 'Get the package to the beach in 2:30.', pay: 400 },
+  { title: '3 · Hot Wheels', brief: 'Steal the Comet at the docks. The docks are watched.', pay: 600 },
+  { title: '4 · Payback', brief: "Ram Rico's sedan until it stops moving.", pay: 700 },
+  { title: '5 · Night Shift', brief: 'Drive Mara to three drops across the city.', pay: 800 },
+  { title: '6 · Golden Getaway', brief: 'Lose a 4-star chase and reach the hills hideout.', pay: 1000 },
+  { title: '7 · The Vault', brief: 'Deal with the guards, grab the cash, deliver it.', pay: 1200 },
+  { title: '8 · Street King', brief: 'Outrun Air One. Deliver the ledger to the lighthouse.', pay: 2000 },
+];
 
-// A rival crew member on foot: shoots at the player, can be shot.
-export class Enemy {
-  constructor(scene, x, z) {
-    this.x = x; this.z = z;
-    this.hp = 100;
-    this.dead = false;
-    this.shootTimer = rand(0.5, 1.5);
-    this.group = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.8, 0.36), new THREE.MeshLambertMaterial({ color: 0x6c3483 }));
-    body.position.y = 1.08; this.group.add(body);
-    const head = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.36, 0.36), new THREE.MeshLambertMaterial({ color: 0x8d5524 }));
-    head.position.y = 1.66; this.group.add(head);
-    const gun = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.14, 0.42), new THREE.MeshLambertMaterial({ color: 0x111111 }));
-    gun.position.set(0.3, 1.0, 0.3); this.group.add(gun);
-    this.group.position.set(x, 0, z);
-    scene.add(this.group);
-    this.scene = scene;
-    this.radius = 1;
+const DROPS = [
+  { x: 200, y: 200, label: 'Drop 1 — North Hills' },
+  { x: 2200, y: 600, label: 'Drop 2 — East Docks' },
+  { x: 600, y: 1400, label: 'Drop 3 — South Row' },
+];
+
+export function startMission(g, idx) {
+  const def = MISSION_DEFS[idx];
+  const m = { idx, def, stage: 0, timer: 0, marker: null, extra: {} };
+  if (idx === 0) {
+    m.marker = { x: GARAGE_POS.x, y: GARAGE_POS.y, label: 'Cross Motors' };
+  } else if (idx === 1) {
+    m.timer = 150;
+    m.marker = { x: 1200, y: 1560, label: 'Beach package point' };
+  } else if (idx === 2) {
+    const comet = makeCar(2150, 300, -Math.PI / 2, { color: '#e74c3c', kind: 'sport', top: 420, hp: 140 });
+    g.cars.push(comet);
+    m.extra.comet = comet;
+    m.marker = { x: 2150, y: 300, label: 'The Comet — East Docks' };
+  } else if (idx === 3) {
+    const sedan = makeCar(1400, 1000, 0, { color: '#8e44ad', kind: 'sedan', top: 330, hp: 120 });
+    g.cars.push(sedan);
+    m.extra.sedan = sedan;
+    m.marker = { x: 1400, y: 1000, label: "Rico's sedan" };
+  } else if (idx === 4) {
+    m.marker = { x: DROPS[0].x, y: DROPS[0].y, label: DROPS[0].label };
+  } else if (idx === 5) {
+    g.wanted = 4;
+    m.timer = 90;
+    m.marker = { x: 200, y: 200, label: 'Hills hideout' };
+  } else if (idx === 6) {
+    const van = makeCar(1800, 1000, Math.PI, { color: '#e8e8e8', kind: 'van', top: 260, hp: 160 });
+    g.cars.push(van);
+    m.extra.van = van;
+    m.extra.guards = [];
+    for (let i = 0; i < 3; i++) {
+      const gp = { x: 1800 + (i - 1) * 44, y: 960, angle: 0, speed: 0, color: '#2c3e50', state: 'guard', fleeX: 0, fleeY: 0, timer: 99, hp: 34 };
+      g.peds.push(gp);
+      m.extra.guards.push(gp);
+    }
+    m.marker = { x: 1800, y: 1000, label: 'Cash van — guarded' };
+  } else if (idx === 7) {
+    g.wanted = 5;
+    m.marker = { x: 2250, y: 1560, label: 'Lighthouse — deliver the ledger' };
   }
+  g.mission = m;
+  g.toast = def.title + ' — ' + def.brief;
+  if (g.audio) g.audio.mission();
+}
 
-  hit(dmg) {
-    this.hp -= dmg;
-    if (this.hp <= 0) this.die();
+export function updateMission(g, dt) {
+  const m = g.mission;
+  if (!m) return;
+  if (m.timer > 0) {
+    m.timer -= dt;
+    if (m.timer <= 0) { failMission(g, 'Out of time.'); return; }
   }
-
-  die() {
-    this.dead = true;
-    this.scene.remove(this.group);
-  }
-
-  update(dt, player, fx, audio) {
-    if (this.dead) return;
-    const d = dist2D(this.x, this.z, player.x, player.z);
-    this.group.rotation.y = Math.atan2(-(player.z - this.z), player.x - this.x);
-    this.shootTimer -= dt;
-    if (d < 45 && this.shootTimer <= 0) {
-      this.shootTimer = rand(1.0, 1.8);
-      fx.tracer(this.x, 1.2, this.z, player.x, 1.2, player.z, 0xffaa33);
-      audio.gunshot();
-      if (Math.random() < 0.55) player.damage(rand(4, 9));
+  const px = g.player.x;
+  const py = g.player.y;
+  switch (m.idx) {
+    case 0: {
+      if (g.car && dist(px, py, GARAGE_POS.x, GARAGE_POS.y) < 130) completeMission(g);
+      else if (g.car) m.marker = { x: GARAGE_POS.x, y: GARAGE_POS.y, label: 'Cross Motors — bring the car here' };
+      else m.marker = { x: px, y: py, label: 'Steal a car first (E)' };
+      break;
+    }
+    case 1: {
+      if (dist(px, py, 1200, 1560) < 60) completeMission(g);
+      break;
+    }
+    case 2: {
+      const comet = m.extra.comet;
+      if (comet.dead) { failMission(g, 'The Comet was wrecked.'); break; }
+      if (!m.extra.stolen && g.car === comet) {
+        m.extra.stolen = true;
+        g.wanted = Math.max(g.wanted, 2);
+        g.toast = 'The Comet is yours — and the docks are calling it in!';
+        m.marker = { x: GARAGE_POS.x, y: GARAGE_POS.y, label: 'Cross Motors' };
+      }
+      if (m.extra.stolen && dist(px, py, GARAGE_POS.x, GARAGE_POS.y) < 130) completeMission(g);
+      break;
+    }
+    case 3: {
+      const sedan = m.extra.sedan;
+      if (sedan.dead) { completeMission(g); break; }
+      // The sedan flees the player.
+      const away = Math.atan2(sedan.y - py, sedan.x - px);
+      sedan.angle = away;
+      sedan.speed = 260;
+      sedan.x += Math.cos(sedan.angle) * sedan.speed * dt;
+      sedan.y += Math.sin(sedan.angle) * sedan.speed * dt;
+      sedan.x = Math.max(40, Math.min(2360, sedan.x));
+      sedan.y = Math.max(40, Math.min(1660, sedan.y));
+      if (collideBuildings(g, sedan, 18)) {
+        // Slide around the wall instead of grinding into it.
+        sedan.x += Math.cos(away + Math.PI / 2) * 180 * dt;
+        sedan.y += Math.sin(away + Math.PI / 2) * 180 * dt;
+      }
+      m.marker = { x: sedan.x, y: sedan.y, label: "Rico's sedan" };
+      if (g.car && dist(px, py, sedan.x, sedan.y) < 44 && Math.abs(g.car.speed) > 90) {
+        damageCar(g, sedan, 40);
+        g.car.speed *= 0.5;
+        g.particles.push({ x: sedan.x, y: sedan.y, vx: 0, vy: 0, life: 0.3, max: 0.3, kind: 'spark' });
+      }
+      break;
+    }
+    case 4: {
+      const drop = DROPS[m.stage];
+      if (dist(px, py, drop.x, drop.y) < 70) {
+        m.stage += 1;
+        g.cash += 0;
+        if (m.stage >= DROPS.length) { completeMission(g); break; }
+        m.marker = { x: DROPS[m.stage].x, y: DROPS[m.stage].y, label: DROPS[m.stage].label };
+        g.toast = 'Drop done — next: ' + DROPS[m.stage].label;
+      }
+      break;
+    }
+    case 5: {
+      if (dist(px, py, 200, 200) < 80) completeMission(g);
+      break;
+    }
+    case 6: {
+      const alive = m.extra.guards.filter((gp) => gp.hp > 0);
+      if (alive.length > 0) {
+        m.marker = { x: 1800, y: 1000, label: `Guards left: ${alive.length}` };
+      } else if (!m.extra.cash) {
+        m.extra.cash = { x: 1800, y: 1040, kind: 'cash', taken: false, respawn: 0, vault: true };
+        g.pickups.push(m.extra.cash);
+        m.marker = { x: 1800, y: 1040, label: 'Grab the cash' };
+        g.toast = 'Guards down — grab the cash!';
+      } else if (m.extra.cash.taken) {
+        m.marker = { x: GARAGE_POS.x, y: GARAGE_POS.y, label: 'Deliver the cash — Cross Motors' };
+        if (dist(px, py, GARAGE_POS.x, GARAGE_POS.y) < 130) completeMission(g);
+      }
+      break;
+    }
+    case 7: {
+      if (dist(px, py, 2250, 1560) < 70) completeMission(g);
+      break;
     }
   }
 }
 
-export class MissionEngine {
-  constructor(scene, city) {
-    this.scene = scene;
-    this.city = city;
-    this.activeIndex = -1;
-    this.stepIndex = 0;
-    this.stepTimer = 0;
-    this.missionTime = 0;
-    this.missionCars = {}; // carId -> Car
-    this.enemies = [];
-    this.rivals = [];
-    this.raceCheckpoint = 0;
-    this.farePed = null;
-    this.markerPos = null;
-    this.markerLabel = '';
-    this.onComplete = null; // (mission) => void
-    this.onFail = null;
-    this.onStep = null; // (label) => void
-    this.buildMarker();
+export function completeMission(g) {
+  const m = g.mission;
+  if (!m) return;
+  g.cash += m.def.pay;
+  g.rep += 25;
+  g.missionsDone.push(m.idx);
+  g.missionIndex = Math.max(g.missionIndex, m.idx + 1);
+  g.mission = null;
+  const final = m.idx === 7;
+  if (final) g.wanted = 0;
+  g.toast = (final ? 'STREET KING — ' : 'Job done — ') + '+' + m.def.pay + ' · +25 REP' + (final ? ' · Porto Verde is yours.' : '');
+  if (g.audio) g.audio.mission();
+  g.saveNow = true;
+}
+
+export function failMission(g, reason) {
+  g.mission = null;
+  g.toast = 'Job failed — ' + reason + ' Press N to retry.';
+  if (g.audio) g.audio.busted();
+}
+
+export function nextJob(g) {
+  if (g.mission) return;
+  if (g.missionIndex >= MISSION_DEFS.length) {
+    g.toast = 'All eight jobs done. Porto Verde is yours — free roam.';
+    return;
   }
+  startMission(g, g.missionIndex);
+}
 
-  buildMarker() {
-    const geo = new THREE.CylinderGeometry(2.2, 2.2, 30, 16, 1, true);
-    const mat = new THREE.MeshBasicMaterial({ color: 0xffd24a, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false });
-    this.marker = new THREE.Mesh(geo, mat);
-    this.marker.position.y = 15;
-    this.marker.visible = false;
-    this.scene.add(this.marker);
-    const ringGeo = new THREE.TorusGeometry(3, 0.25, 8, 24);
-    this.markerRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffd24a }));
-    this.markerRing.rotation.x = -Math.PI / 2;
-    this.markerRing.position.y = 0.3;
-    this.markerRing.visible = false;
-    this.scene.add(this.markerRing);
-  }
-
-  get active() { return this.activeIndex >= 0; }
-  get mission() { return this.active ? MISSIONS[this.activeIndex] : null; }
-  get step() { return this.active ? this.mission.steps[this.stepIndex] : null; }
-
-  start(index, ctx) {
-    this.cleanup(ctx);
-    this.activeIndex = index;
-    this.stepIndex = 0;
-    this.stepTimer = 0;
-    this.missionTime = 0;
-    const m = this.mission;
-    ctx.audio.missionStart();
-    ctx.toast(m.title + ' — ' + m.briefing, 8);
-    this.beginStep(ctx);
-  }
-
-  beginStep(ctx) {
-    const s = this.step;
-    if (!s) return;
-    this.markerLabel = s.label;
-    if (s.type === 'enterVehicle' && !this.missionCars[s.carId]) {
-      const def = MISSION_CARS[s.carId];
-      const car = new Car(this.scene, def.type, def.x, def.z, def.heading, def.color);
-      this.missionCars[s.carId] = car;
-      ctx.allCars.push(car);
-      if (s.guards) {
-        for (let i = 0; i < s.guards; i++) {
-          const e = new Enemy(this.scene, def.x + rand(-8, 8), def.z + rand(-8, 8));
-          this.enemies.push(e);
-        }
-        ctx.toast('Ferreira\'s crew is guarding the car!', 4);
-      }
-    }
-    if (s.type === 'clearOut' && s.guards) {
-      for (let i = 0; i < s.guards; i++) {
-        const e = new Enemy(this.scene, s.x + rand(-10, 10), s.z + rand(-10, 10));
-        this.enemies.push(e);
-      }
-      ctx.toast('Ferreira\'s crew is here — clear them out!', 4);
-    }
-    if (s.type === 'race') {
-      this.raceCheckpoint = 0;
-      // Rival racers line up at the start (two by default, more on convoy jobs).
-      const rivalCount = s.rivals || 2;
-      const rivalColors = [0x1abc9c, 0x9b59b6, 0xe67e22, 0x2471a3];
-      for (let i = 0; i < rivalCount; i++) {
-        const startCp = s.checkpoints[0];
-        const rival = new Car(this.scene, 'sports', startCp.x - 6 + i * 12, startCp.z - 2.5, 0, rivalColors[i % rivalColors.length]);
-        rival.cruise = 30 + i * 2;
-        rival.cp = 0;
-        this.rivals.push(rival);
-        ctx.allCars.push(rival);
-      }
-    }
-    if (s.type === 'pickup') {
-      // A fare waits on the sidewalk.
-      const ped = ctx.peds.spawnOneAt ? ctx.peds.spawnOneAt(s.x, s.z + 9) : null;
-      this.farePed = ped;
-    }
-    if (this.onStep) this.onStep(s.label);
-    this.updateMarker();
-  }
-
-  updateMarker() {
-    const s = this.step;
-    if (!s) { this.marker.visible = false; this.markerRing.visible = false; this.markerPos = null; return; }
-    let pos = null;
-    if (s.type === 'race') pos = s.checkpoints[this.raceCheckpoint];
-    else if (s.type === 'enterVehicle') {
-      const c = this.missionCars[s.carId];
-      pos = c ? { x: c.x, z: c.z } : MISSION_CARS[s.carId];
-    } else pos = { x: s.x, z: s.z };
-    this.markerPos = pos;
-    this.marker.position.set(pos.x, 15, pos.z);
-    this.markerRing.position.set(pos.x, 0.3, pos.z);
-    this.marker.visible = true;
-    this.markerRing.visible = true;
-  }
-
-  advance(ctx) {
-    this.stepIndex++;
-    if (this.stepIndex >= this.mission.steps.length) {
-      this.complete(ctx);
-      return;
-    }
-    this.beginStep(ctx);
-  }
-
-  complete(ctx) {
-    const m = this.mission;
-    ctx.audio.missionDone();
-    ctx.addCash(m.reward);
-    ctx.addRep(25);
-    ctx.toast('MISSION COMPLETE: ' + m.title + ' — +' + formatCash(m.reward), 6);
-    if (this.onComplete) this.onComplete(m);
-    this.activeIndex = -1;
-    this.stepIndex = 0;
-    this.marker.visible = false;
-    this.markerRing.visible = false;
-    this.markerPos = null;
-    this.cleanup(ctx);
-  }
-
-  fail(ctx, reason) {
-    ctx.toast('MISSION FAILED: ' + reason + ' — press N to retry.', 6);
-    if (this.onFail) this.onFail(this.mission);
-    this.activeIndex = -1;
-    this.stepIndex = 0;
-    this.marker.visible = false;
-    this.markerRing.visible = false;
-    this.markerPos = null;
-    this.cleanup(ctx);
-  }
-
-  cleanup(ctx) {
-    for (const id of Object.keys(this.missionCars)) {
-      const car = this.missionCars[id];
-      if (ctx.player.car !== car) {
-        car.remove();
-        const i = ctx.allCars.indexOf(car);
-        if (i >= 0) ctx.allCars.splice(i, 1);
-      }
-    }
-    this.missionCars = {};
-    for (const e of this.enemies) if (!e.dead) e.die();
-    this.enemies = [];
-    for (const r of this.rivals) {
-      r.remove();
-      const i = ctx.allCars.indexOf(r);
-      if (i >= 0) ctx.allCars.splice(i, 1);
-    }
-    this.rivals = [];
-    this.farePed = null;
-  }
-
-  update(dt, ctx) {
-    if (!this.active) return;
-    const m = this.mission;
-    const s = this.step;
-    const p = ctx.player;
-    this.missionTime += dt;
-    if (m.timeLimit && this.missionTime > m.timeLimit) {
-      this.fail(ctx, 'Out of time');
-      return;
-    }
-    // Enemies keep shooting.
-    for (let i = this.enemies.length - 1; i >= 0; i--) {
-      const e = this.enemies[i];
-      if (e.dead) { this.enemies.splice(i, 1); continue; }
-      e.update(dt, p, ctx.fx, ctx.audio);
-    }
-    // Mission-car destroyed = fail (except the race rivals).
-    if (s && s.type !== 'race') {
-      for (const id of Object.keys(this.missionCars)) {
-        if (this.missionCars[id].dead) { this.fail(ctx, 'The mission car was wrecked'); return; }
-      }
-    }
-    // Marker pulse.
-    this.marker.material.opacity = 0.2 + Math.sin(this.missionTime * 4) * 0.08;
-    this.markerRing.scale.setScalar(1 + Math.sin(this.missionTime * 4) * 0.12);
-    this.updateMarker();
-
-    switch (s.type) {
-      case 'clearOut':
-        if (this.enemies.length === 0) {
-          ctx.toast('Crew cleared — grab the van!', 3);
-          this.advance(ctx);
-        }
-        break;
-      case 'goto':
-        if (dist2D(p.x, p.z, s.x, s.z) < (s.radius || 5)) {
-          if (s.wantedOnStart) ctx.police.setStars(s.wantedOnStart);
-          this.advance(ctx);
-        }
-        break;
-      case 'enterVehicle': {
-        const car = this.missionCars[s.carId];
-        if (car && p.car === car) {
-          if (s.wantedOnEnter) ctx.police.setStars(s.wantedOnEnter);
-          ctx.toast('Got it. Now drive!', 3);
-          this.advance(ctx);
-        }
-        break;
-      }
-      case 'driveTo':
-      case 'deliver':
-        if (dist2D(p.x, p.z, s.x, s.z) < (s.radius || 8)) {
-          if (s.wantedOnStart) ctx.police.setStars(s.wantedOnStart);
-          this.advance(ctx);
-        }
-        break;
-      case 'pickup':
-        if (p.car && dist2D(p.x, p.z, s.x, s.z) < 8) {
-          ctx.audio.coin();
-          ctx.toast('Fare aboard — drive!', 3);
-          if (this.farePed) {
-            // The fare gets in: remove their sidewalk figure.
-            const idx = ctx.peds.peds.indexOf(this.farePed);
-            if (idx >= 0) { ctx.scene.remove(this.farePed.mesh); ctx.peds.peds.splice(idx, 1); }
-            this.farePed = null;
-          }
-          this.advance(ctx);
-        }
-        break;
-      case 'race': {
-        const cp = s.checkpoints[this.raceCheckpoint];
-        if (dist2D(p.x, p.z, cp.x, cp.z) < 9) {
-          this.raceCheckpoint++;
-          ctx.audio.coin();
-          if (this.raceCheckpoint >= s.checkpoints.length) {
-            this.advance(ctx);
-            break;
-          }
-          ctx.toast('Gate ' + (this.raceCheckpoint + 1) + ' of ' + s.checkpoints.length, 2);
-        }
-        // Rivals follow the gates.
-        for (const r of this.rivals) {
-          if (r.dead) continue;
-          const rcp = s.checkpoints[Math.min(r.cp, s.checkpoints.length - 1)];
-          const d = dist2D(r.x, r.z, rcp.x, rcp.z);
-          if (d < 9) r.cp++;
-          if (r.cp >= s.checkpoints.length) {
-            this.fail(ctx, 'A rival finished first');
-            return;
-          }
-          const targetAngle = Math.atan2(-(rcp.z - r.z), rcp.x - r.x);
-          let dh = targetAngle - r.heading;
-          while (dh > Math.PI) dh -= Math.PI * 2;
-          while (dh < -Math.PI) dh += Math.PI * 2;
-          const steer = clamp(dh * 1.6, -1, 1);
-          r.step(dt, { throttle: 1, steer, handbrake: false }, this.city, 1);
-        }
-        break;
-      }
-    }
-  }
+export function rankLabel(g) {
+  return 'REP ' + g.rep + ' · ' + rankFor(g.rep);
 }

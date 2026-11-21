@@ -3,148 +3,98 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="data:,">
-<title>Porto Verde: Full Throttle</title>
+<title>Porto Verde: Full Throttle — Golden Hour</title>
 <link rel="stylesheet" href="style.css">
-<script type="importmap">
-{ "imports": { "three": "./vendor/three.module.min.js" } }
-</script>
 </head>
 <body>
-<canvas id="game-canvas"></canvas>
+<div id="stage">
+  <canvas id="game" width="1280" height="800"></canvas>
 
-<!-- HUD -->
-<div id="hud" class="hidden">
-  <div id="top-left">
-    <div id="stars">☆☆☆☆☆</div>
-    <div id="airone"></div>
+  <div id="hud-left">
+    <div id="stars" aria-label="wanted level"></div>
+    <div id="airone" class="hidden">🚁 AIR ONE OVERHEAD</div>
     <div id="cash">$150</div>
     <div id="rep">REP 0 · ROOKIE</div>
     <div id="clock">18:47</div>
   </div>
-  <div id="top-right">
+
+  <div id="hud-top">
+    <div id="city-name">PORTO VERDE</div>
+    <div id="mission-title">Free roam — press N for the next job</div>
+    <div id="mission-obj"></div>
+    <div id="mission-timer" class="hidden"></div>
+  </div>
+
+  <div id="hud-right">
     <canvas id="minimap" width="220" height="220"></canvas>
-    <div id="radio">♪ VERDE FM · Sunset Drive</div>
+    <div id="radio-label">♪ VERDE FM · Sunset Drive</div>
   </div>
-  <div id="objective-box">
-    <div id="objective-label">PORTO VERDE</div>
-    <div id="objective">Free roam — press N for the next job</div>
-    <div id="mission-timer"></div>
+
+  <div id="hud-bottom-left">
+    <div id="hp-bar"><div id="hp-fill"></div></div>
+    <div id="hp-text">100 HP</div>
+    <div id="ammo-text" class="hidden">AMMO 12 / 60</div>
+    <div id="weapon-slots" class="hidden"></div>
   </div>
-  <div id="bottom-left">
-    <div id="health-bar"><div id="health-fill"></div></div>
-    <div id="health-text">100 HP</div>
-    <div id="ammo"></div>
-    <div id="weapon-wheel"></div>
-  </div>
-  <div id="bottom-right">
-    <div id="speed">0</div>
+
+  <div id="hud-bottom-right">
+    <div id="speed-num">0</div>
     <div id="speed-unit">km/h</div>
-    <div id="car-hp"></div>
+    <div id="car-hp">CAR 100%</div>
   </div>
-  <div id="controls-hint">WASD drive / walk · E enter car · Space drift · Mouse drag camera · Click shoot · R reload / reset car · F punch · H horn · N next job · G garage shop (in bay) · U engine / I armour · Q / 1-3 radio · 4-6 / C weapons · M mute · Esc pause</div>
-  <div id="crosshair">+</div>
-  <div id="toast"></div>
-  <div id="vignette"></div>
-</div>
 
-<!-- Start screen -->
-<div id="start-screen" class="screen">
-  <div class="panel">
-    <h1>PORTO VERDE</h1>
-    <h2>FULL THROTTLE</h2>
-    <p class="tagline">An open-world crime game. Steal cars. Outrun the PVPD. Own the city.</p>
-    <p id="story-text" class="story"></p>
-    <div class="btn-row">
-      <button id="btn-new" class="menu-btn big">▶ New Game</button>
-      <button id="btn-continue" class="menu-btn big">Continue</button>
+  <div id="hint">WASD drive / walk · E enter car · Space drift · Click shoot · R reload / reset car · F punch · H horn · N next job · G garage shop (in bay) · Q / 1-3 radio · 4/5/6 / C weapons · M mute · Esc pause</div>
+
+  <div id="toast" class="hidden"></div>
+
+  <div id="menu" class="overlay">
+    <div class="panel">
+      <h1>PORTO VERDE</h1>
+      <h2>Full Throttle — Golden Hour</h2>
+      <p class="tagline">Eight jobs. One debt. A whole city at dusk.</p>
+      <p class="story">Jax owes Cross Motors $5,000. Mara Voss has eight jobs that pay it off — if the Porto Verde police don't catch him first.</p>
+      <div class="menu-buttons">
+        <button id="btn-new">New Game</button>
+        <button id="btn-continue" class="hidden">Continue</button>
+      </div>
+      <p class="controls">WASD drive &amp; walk · E steal / enter car · Space drift · Mouse aim, click to shoot · N next job · G garage · Q radio · Esc pause</p>
+      <p id="save-info" class="save-info"></p>
     </div>
-    <p id="save-info" class="save-info"></p>
-    <div class="controls-grid">
-      <div><b>W A S D</b> drive / walk</div>
-      <div><b>E</b> enter / leave car</div>
-      <div><b>Space</b> handbrake drift</div>
-      <div><b>Mouse drag</b> camera</div>
-      <div><b>Click</b> shoot (on foot)</div>
-      <div><b>R</b> reload / reset car</div>
-      <div><b>F</b> punch</div>
-      <div><b>N</b> next job</div>
-      <div><b>U / I</b> garage upgrades</div>
-      <div><b>G</b> garage shop (in bay)</div>
-      <div><b>Q / 1-3</b> radio · <b>M</b> mute</div>
-      <div><b>4-6 / C</b> weapon wheel</div>
-      <div><b>Esc</b> pause / save</div>
+  </div>
+
+  <div id="pause" class="overlay hidden">
+    <div class="panel">
+      <h1>PAUSED</h1>
+      <p class="tagline">Porto Verde waits for no one. Except now.</p>
+      <div class="menu-buttons">
+        <button id="btn-resume">Resume</button>
+        <button id="btn-quit">Save &amp; Quit to Menu</button>
+      </div>
     </div>
-    <p class="fine">A fully original game. Porto Verde, Jax Moreno, Lena Cross and Dante Ferreira are invented for this game — no Rockstar / GTA names, art or music. All sound is synthesized live.</p>
   </div>
-</div>
 
-<!-- Pause menu -->
-<div id="pause-menu" class="screen hidden">
-  <div class="panel">
-    <h1>PAUSED</h1>
-    <p class="tagline">Porto Verde waits for no one. Except now.</p>
-    <div class="btn-col">
-      <button id="btn-resume" class="menu-btn">Resume</button>
-      <button id="btn-save" class="menu-btn">Save game</button>
-      <button id="btn-mute" class="menu-btn">Mute (M)</button>
-      <button id="btn-quit" class="menu-btn">Save &amp; quit to title</button>
+  <div id="garage" class="overlay hidden">
+    <div class="panel shop">
+      <h1>CROSS MOTORS</h1>
+      <p class="tagline">Full garage shop — performance, paint, wheels, spoiler. Respect unlocks the good stock.</p>
+      <p id="shop-status">$150 · ROOKIE</p>
+      <div id="shop-items"></div>
+      <div class="menu-buttons">
+        <button id="btn-close-shop">Close (G)</button>
+      </div>
     </div>
-    <h3>Jobs</h3>
-    <div id="mission-list" class="btn-col"></div>
   </div>
-</div>
 
-<!-- Busted -->
-<div id="busted-screen" class="screen hidden">
-  <div class="panel">
-    <h1 class="red">BUSTED</h1>
-    <p class="tagline">The PVPD caught up with Jax.</p>
-    <p id="busted-fine"></p>
-    <button id="btn-busted" class="menu-btn big">Pay up &amp; walk out</button>
-  </div>
-</div>
-
-<!-- Wasted -->
-<div id="dead-screen" class="screen hidden">
-  <div class="panel">
-    <h1 class="red">WASTED</h1>
-    <p class="tagline">Jax went down in the streets of Porto Verde.</p>
-    <p>Hospital bill: $200. The city is still yours to take back.</p>
-    <button id="btn-dead" class="menu-btn big">Get back up</button>
-  </div>
-</div>
-
-<!-- Cross Motors garage shop -->
-<div id="garage-screen" class="screen hidden">
-  <div class="panel shop-panel">
-    <h1 class="gold">CROSS MOTORS</h1>
-    <p class="tagline">Full garage shop — performance, paint, wheels, spoiler. Respect unlocks the good stock.</p>
-    <p id="garage-cash" class="save-info"></p>
-    <h3>Performance</h3>
-    <div id="shop-performance" class="btn-col"></div>
-    <h3>Paint</h3>
-    <div id="shop-paint" class="btn-col"></div>
-    <h3>Wheels</h3>
-    <div id="shop-wheels" class="btn-col"></div>
-    <h3>Visual</h3>
-    <div id="shop-visual" class="btn-col"></div>
-    <div class="btn-row" style="margin-top:16px">
-      <button id="btn-garage-close" class="menu-btn big">Done (G)</button>
+  <div id="busted" class="overlay hidden">
+    <div class="panel">
+      <h1 id="busted-title">BUSTED</h1>
+      <p class="tagline" id="busted-sub">The Porto Verde police took you in.</p>
+      <div class="menu-buttons">
+        <button id="btn-retry">Retry</button>
+      </div>
     </div>
   </div>
 </div>
-
-<!-- Story complete -->
-<div id="complete-screen" class="screen hidden">
-  <div class="panel">
-    <h1 class="gold">PORTO VERDE IS YOURS</h1>
-    <p class="tagline">Ferreira's gold supercar sits in Cross Motors. The casinos pay protection to Lena now, and the night roads belong to Jax Moreno.</p>
-    <p>All eight jobs complete. Keep driving — the city never sleeps.</p>
-    <button id="btn-complete" class="menu-btn big">Keep driving</button>
-  </div>
-</div>
-
-<script type="module" src="./src/main.js"></script>
+<script type="module" src="src/main.js"></script>
 </body>
 </html>

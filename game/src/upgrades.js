@@ -1,141 +1,173 @@
-// upgrades.js — the full Cross Motors garage shop. While stopped in the
-// garage bay, the player can buy performance stages, repaint the car,
-// fit new wheels and bolt on a spoiler. Everything costs cash, the good
-// stock is locked behind respect ranks, and every purchase persists in the
-// save and is re-applied to every car Jax gets into.
-// Keys in the bay: U engine / I armour; G opens the full shop panel.
-export const UPGRADE_DEFS = {
-  engine: { key: 'engine', costs: [800, 1500, 2500], label: 'Engine', bonus: '+15% top speed', lockRep: [0, 0, 50], lockRank: [null, null, 'HUSTLER'] },
-  armor: { key: 'armor', costs: [600, 1200, 2200], label: 'Armour', bonus: '+50 max HP', lockRep: [0, 0, 100], lockRank: [null, null, 'STREET KING'] },
-};
+// Cross Motors garage shop: performance, paint, wheels, spoiler.
+// Respect ranks gate the good stock; purchases apply immediately and autosave.
+import { GARAGE, PAINTS, WHEELS, rankIndexFor, rankFor } from './state.js';
+import { fmtMoney, $ } from './util.js';
+import { saveGame } from './save.js';
+import { playerTopSpeed } from './vehicles.js';
 
-export const PAINTS = [
-  { name: 'Sunset Red', hex: 0xd94f30, cost: 0 },
-  { name: 'Ocean Blue', hex: 0x2e86c1, cost: 300 },
-  { name: 'Taxi Gold', hex: 0xf1c40f, cost: 300 },
-  { name: 'Palm Green', hex: 0x27ae60, cost: 300 },
-  { name: 'Vice Purple', hex: 0x8e44ad, cost: 300 },
-  { name: 'Neon Orange', hex: 0xe67e22, cost: 300 },
-  { name: 'Arctic White', hex: 0xecf0f1, cost: 400 },
-  { name: 'Midnight Black', hex: 0x1c1c1e, cost: 400 },
-  { name: 'Mint Teal', hex: 0x16a085, cost: 300 },
-];
-
-export const WHEELS = [
-  { name: 'Standard', cost: 0, lockRep: 0, lockRank: null, color: 0x141414 },
-  { name: 'Sport', cost: 400, lockRep: 25, lockRank: 'WHEELMAN', color: 0x888888 },
-  { name: 'Chrome', cost: 700, lockRep: 50, lockRank: 'HUSTLER', color: 0xd8d8d8 },
-];
-
-export const SPOILER = { name: 'Rear Spoiler', cost: 350, lockRep: 25, lockRank: 'WHEELMAN' };
-
-export function defaultGarage() {
-  return {
-    engine: 0, armor: 0,
-    paint: 'Sunset Red', ownedPaints: ['Sunset Red'],
-    wheels: 'Standard', spoiler: false,
-  };
+function lockedByRank(g, need) {
+  return rankIndexFor(g.rep) < (need || 0);
 }
 
-export class Upgrades {
-  constructor() {
-    this.levels = { engine: 0, armor: 0 };
-    this.paint = 'Sunset Red';
-    this.ownedPaints = ['Sunset Red'];
-    this.wheels = 'Standard';
-    this.spoiler = false;
-  }
+export function openShop(g) {
+  g.mode = 'garage';
+  renderShop(g);
+  $('garage').classList.remove('hidden');
+}
 
-  load(saved) {
-    if (!saved) return;
-    this.levels = { engine: saved.engine | 0, armor: saved.armor | 0 };
-    if (saved.paint) this.paint = saved.paint;
-    if (Array.isArray(saved.ownedPaints) && saved.ownedPaints.length) this.ownedPaints = saved.ownedPaints.slice();
-    if (saved.wheels) this.wheels = saved.wheels;
-    this.spoiler = !!saved.spoiler;
-  }
+export function closeShop(g) {
+  $('garage').classList.add('hidden');
+  g.mode = 'playing';
+}
 
-  // Backwards-compatible: the old save shape was {engine, armor} only.
-  save() {
-    return {
-      engine: this.levels.engine, armor: this.levels.armor,
-      paint: this.paint, ownedPaints: this.ownedPaints.slice(),
-      wheels: this.wheels, spoiler: this.spoiler,
-    };
-  }
+export function renderShop(g) {
+  $('shop-status').textContent = fmtMoney(g.cash) + ' · ' + rankFor(g.rep);
+  const box = $('shop-items');
+  box.innerHTML = '';
+  const addSection = (title) => {
+    const h = document.createElement('h3');
+    h.textContent = title;
+    box.appendChild(h);
+  };
+  const addItem = (label, sub, priceText, action, locked, fitted) => {
+    const row = document.createElement('div');
+    row.className = 'shop-item' + (locked ? ' locked' : '');
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.textContent = label;
+    const subEl = document.createElement('span');
+    subEl.className = 'sub';
+    subEl.textContent = sub;
+    name.appendChild(subEl);
+    row.appendChild(name);
+    const price = document.createElement('div');
+    price.className = fitted ? 'fitted' : 'price';
+    price.textContent = fitted ? '✓ FITTED' : priceText;
+    row.appendChild(price);
+    if (!locked && !fitted) row.addEventListener('click', action);
+    box.appendChild(row);
+  };
 
-  nextCost(kind) {
-    const def = UPGRADE_DEFS[kind];
-    const lvl = this.levels[kind];
-    return lvl >= def.costs.length ? null : def.costs[lvl];
-  }
+  addSection('Performance');
+  GARAGE.engine.forEach((e, i) => {
+    const stage = i + 1;
+    const owned = g.garage.engine >= stage;
+    const next = stage === g.garage.engine + 1;
+    addItem(
+      'Engine · Stage ' + stage + '/3',
+      next ? 'Next — ' + e.label : e.label,
+      owned ? (stage === g.garage.engine ? '' : 'OWNED') : fmtMoney(e.price),
+      () => buyEngine(g, stage),
+      !owned && (lockedByRank(g, e.need) || g.cash < e.price || !next),
+      owned && stage === g.garage.engine,
+    );
+  });
+  GARAGE.armour.forEach((a, i) => {
+    const stage = i + 1;
+    const owned = g.garage.armour >= stage;
+    const next = stage === g.garage.armour + 1;
+    addItem(
+      'Armour · Stage ' + stage + '/3',
+      next ? 'Next — ' + a.label : a.label,
+      owned ? (stage === g.garage.armour ? '' : 'OWNED') : fmtMoney(a.price),
+      () => buyArmour(g, stage),
+      !owned && (lockedByRank(g, a.need) || g.cash < a.price || !next),
+      owned && stage === g.garage.armour,
+    );
+  });
 
-  // Rank gate for the next stage of kind; returns the blocking rank or null.
-  lockFor(kind, rep) {
-    const def = UPGRADE_DEFS[kind];
-    const lvl = this.levels[kind];
-    if (lvl >= def.costs.length) return null;
-    const need = def.lockRep[lvl];
-    return rep >= need ? null : def.lockRank[lvl];
-  }
+  addSection('Paint');
+  PAINTS.forEach((p, i) => {
+    const owned = g.garage.ownedPaints.includes(i);
+    addItem(
+      p.name,
+      owned ? 'Owned — click to fit' : fmtMoney(p.price),
+      owned ? '' : fmtMoney(p.price),
+      () => buyPaint(g, i),
+      !owned && g.cash < p.price,
+      g.garage.paint === i,
+    );
+  });
 
-  // Apply the saved levels + visuals to a car (idempotent per car).
-  applyTo(car) {
-    if (!car._upgBase) car._upgBase = { maxSpeed: car.stats.maxSpeed, hp: car.stats.hp };
-    car.stats.maxSpeed = car._upgBase.maxSpeed * (1 + 0.15 * this.levels.engine);
-    car.stats.hp = car._upgBase.hp + 50 * this.levels.armor;
-    if (car.hp > car.stats.hp) car.hp = car.stats.hp;
-    const paint = PAINTS.find((p) => p.name === this.paint);
-    car.applyVisual(paint ? paint.hex : 0xd94f30, this.wheels, this.spoiler);
-  }
+  addSection('Wheels');
+  WHEELS.forEach((w, i) => {
+    const owned = g.garage.wheels >= i;
+    addItem(
+      w.name + ' Wheels',
+      lockedByRank(g, w.need) ? 'Needs ' + ['ROOKIE', 'WHEELMAN', 'HUSTLER', 'STREET KING'][w.need] : 'Fitted set',
+      owned ? (g.garage.wheels === i ? '' : 'OWNED') : fmtMoney(w.price),
+      () => buyWheels(g, i),
+      !owned && (lockedByRank(g, w.need) || g.cash < w.price),
+      g.garage.wheels === i,
+    );
+  });
 
-  // Buy the next stage of kind for cash; returns a message for the HUD.
-  buy(kind, cash, rep) {
-    const def = UPGRADE_DEFS[kind];
-    const cost = this.nextCost(kind);
-    if (cost === null) return { ok: false, msg: def.label + ' is maxed out.' };
-    const lock = this.lockFor(kind, rep);
-    if (lock) return { ok: false, msg: def.label + ' stage ' + (this.levels[kind] + 1) + ' needs rank ' + lock + ' — earn more respect.' };
-    if (cash < cost) return { ok: false, msg: def.label + ' stage ' + (this.levels[kind] + 1) + ' costs $' + cost + ' — not enough cash.' };
-    this.levels[kind]++;
-    return { ok: true, cost, msg: def.label + ' stage ' + this.levels[kind] + ' fitted (' + def.bonus + ') — $' + cost };
-  }
+  addSection('Spoiler');
+  addItem(
+    'Rear Spoiler',
+    lockedByRank(g, GARAGE.spoiler.need) ? 'Needs WHEELMAN' : '+downforce, +style',
+    g.garage.spoiler ? '' : fmtMoney(GARAGE.spoiler.price),
+    () => buySpoiler(g),
+    !g.garage.spoiler && (lockedByRank(g, GARAGE.spoiler.need) || g.cash < GARAGE.spoiler.price),
+    g.garage.spoiler,
+  );
+}
 
-  // Buy a paint job (or switch to one already owned, free).
-  buyPaint(name, cash) {
-    const paint = PAINTS.find((p) => p.name === name);
-    if (!paint) return { ok: false, msg: 'Unknown paint.' };
-    if (this.ownedPaints.includes(name)) {
-      this.paint = name;
-      return { ok: true, cost: 0, msg: 'Paint switched to ' + name + '.' };
-    }
-    if (cash < paint.cost) return { ok: false, msg: name + ' paint costs $' + paint.cost + ' — not enough cash.' };
-    this.ownedPaints.push(name);
-    this.paint = name;
-    return { ok: true, cost: paint.cost, msg: name + ' paint applied — $' + paint.cost };
-  }
+function buyEngine(g, stage) {
+  const e = GARAGE.engine[stage - 1];
+  if (g.garage.engine !== stage - 1 || g.cash < e.price || lockedByRank(g, e.need)) return;
+  g.cash -= e.price;
+  g.garage.engine = stage;
+  if (g.car) g.car.top = playerTopSpeed(g);
+  g.toast = 'Engine Stage ' + stage + ' fitted — top speed up!';
+  afterPurchase(g);
+}
 
-  buyWheels(name, cash, rep) {
-    const w = WHEELS.find((x) => x.name === name);
-    if (!w) return { ok: false, msg: 'Unknown wheels.' };
-    if (this.wheels === name) return { ok: false, msg: name + ' wheels already fitted.' };
-    if (rep < w.lockRep) return { ok: false, msg: name + ' wheels need rank ' + w.lockRank + ' — earn more respect.' };
-    if (cash < w.cost) return { ok: false, msg: name + ' wheels cost $' + w.cost + ' — not enough cash.' };
-    this.wheels = name;
-    return { ok: true, cost: w.cost, msg: name + ' wheels fitted — $' + w.cost };
-  }
+function buyArmour(g, stage) {
+  const a = GARAGE.armour[stage - 1];
+  if (g.garage.armour !== stage - 1 || g.cash < a.price || lockedByRank(g, a.need)) return;
+  g.cash -= a.price;
+  g.garage.armour = stage;
+  if (g.car) { g.car.maxHp = a.hp; g.car.hp = Math.min(g.car.hp + 50, a.hp); }
+  g.toast = 'Armour Stage ' + stage + ' fitted — max HP ' + a.hp + '.';
+  afterPurchase(g);
+}
 
-  buySpoiler(cash, rep) {
-    if (this.spoiler) return { ok: false, msg: 'Spoiler already fitted.' };
-    if (rep < SPOILER.lockRep) return { ok: false, msg: 'Spoiler needs rank ' + SPOILER.lockRank + ' — earn more respect.' };
-    if (cash < SPOILER.cost) return { ok: false, msg: 'Spoiler costs $' + SPOILER.cost + ' — not enough cash.' };
-    this.spoiler = true;
-    return { ok: true, cost: SPOILER.cost, msg: 'Rear spoiler fitted — $' + SPOILER.cost };
+function buyPaint(g, i) {
+  const p = PAINTS[i];
+  if (!g.garage.ownedPaints.includes(i)) {
+    if (g.cash < p.price) return;
+    g.cash -= p.price;
+    g.garage.ownedPaints.push(i);
   }
+  g.garage.paint = i;
+  if (g.car) g.car.color = p.color;
+  g.toast = p.name + ' paint fitted.';
+  afterPurchase(g);
+}
 
-  removeSpoiler() {
-    if (!this.spoiler) return { ok: false, msg: 'No spoiler fitted.' };
-    this.spoiler = false;
-    return { ok: true, cost: 0, msg: 'Spoiler removed.' };
+function buyWheels(g, i) {
+  const w = WHEELS[i];
+  if (g.garage.wheels !== i) {
+    if (g.cash < w.price || lockedByRank(g, w.need)) return;
+    g.cash -= w.price;
+    g.garage.wheels = i;
   }
+  g.toast = w.name + ' wheels fitted.';
+  afterPurchase(g);
+}
+
+function buySpoiler(g) {
+  if (g.garage.spoiler || g.cash < GARAGE.spoiler.price || lockedByRank(g, GARAGE.spoiler.need)) return;
+  g.cash -= GARAGE.spoiler.price;
+  g.garage.spoiler = true;
+  if (g.car) g.car.spoiler = true;
+  g.toast = 'Spoiler fitted.';
+  afterPurchase(g);
+}
+
+function afterPurchase(g) {
+  saveGame(g);
+  renderShop(g);
+  if (g.audio) g.audio.pickup();
 }

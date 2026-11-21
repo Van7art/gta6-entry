@@ -1,136 +1,201 @@
-// probe.mjs — functional probes for the R3 variant-B systems, run in
-// headless Chrome over the DevTools pipe (same file:// redirector trick
-// as shoot.mjs). Adapted from the R2 probe tool; the R2 original is kept
-// untouched as probe-r2.mjs.
-// Usage: node tools/probe.mjs <variantDir> [port]
-// Each check is an async snippet evaluated in the page; prints PASS/FAIL
-// with evidence. Exits 1 if any check fails. The Chrome profile dir is
-// wiped first so no stale localStorage save leaks into the run.
-import { spawn, execSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+// Headless probe for Porto Verde R3.1: drives every system and reports pass/fail.
+// Usage: node tools/probe.mjs [root] — root defaults to this entry's directory.
+import { serve, launchBrowser, connect, sleep } from './cdp.mjs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
-const dir = resolve(process.argv[2]);
-const port = Number(process.argv[3] || 8171);
-const CHROME = '/opt/meta-chromium/chrome';
-const POLICY_FILE = '/home/hatch/workspace/.tmp/pol-c.txt';
-const POLICY_SHA = '8097045f0459c96c4cdc76e3a1af4e0f43f640b4b59c43d6db35e3641c0264c6';
-const PROFILE = '/home/hatch/workspace/.tmp/chrome-probe-r3vb';
-const PROBE = '/tmp/pv-probe.html';
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-writeFileSync(PROBE, '<!doctype html><script>location.href=decodeURIComponent(location.search.slice(3));</script>');
-try { execSync(`rm -rf ${PROFILE}`); } catch { /* first run */ }
+const ROOT = process.argv[2] || join(dirname(fileURLToPath(import.meta.url)), '..');
+const PORT = 8471;
+const DBG = 9223;
 
-class PipeCDP {
-  constructor(proc) {
-    this.proc = proc; this.id = 0; this.pending = new Map(); this.events = [];
-    let buf = Buffer.alloc(0);
-    proc.stdio[4].on('data', (d) => {
-      buf = Buffer.concat([buf, d]);
-      let i;
-      while ((i = buf.indexOf(0)) >= 0) {
-        const msg = JSON.parse(buf.subarray(0, i).toString());
-        buf = buf.subarray(i + 1);
-        if (msg.id && this.pending.has(msg.id)) {
-          const { res, rej } = this.pending.get(msg.id); this.pending.delete(msg.id);
-          msg.error ? rej(new Error(JSON.stringify(msg.error))) : res(msg.result);
-        } else if (msg.method) this.events.push(msg);
-      }
-    });
-  }
-  send(method, params = {}, sessionId) {
-    return new Promise((res, rej) => {
-      const id = ++this.id; this.pending.set(id, { res, rej });
-      this.proc.stdio[3].write(JSON.stringify({ id, method, params, sessionId }) + '\0');
-    });
-  }
-  async eval(expr, sid) {
-    const r = await this.send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }, sid);
-    if (r.exceptionDetails) return { error: (r.exceptionDetails.exception?.description || r.exceptionDetails.text || '').slice(0, 300) };
-    return r.result.value;
-  }
+const results = [];
+function check(name, ok, detail = '') {
+  results.push({ name, ok: !!ok, detail });
+  console.log((ok ? 'PASS' : 'FAIL') + '  ' + name + (detail ? ' — ' + detail : ''));
 }
 
-const wait = `(ms)=>new Promise(r=>setTimeout(r,ms))`;
+const server = await serve(ROOT, PORT);
+const { chrome, wsUrl } = await launchBrowser(DBG, `http://127.0.0.1:${PORT}/game/index.html`);
+const cdp = await connect(wsUrl);
+await cdp.send('Runtime.enable');
+await cdp.send('Page.enable');
+await cdp.send('Log.enable');
 
-const CHECKS = [
-  ['pause menu lists 8 missions', `(async()=>{ return {buttons: document.querySelectorAll('#mission-list button').length}; })()`],
-  ['respect rank: REP 0 shows ROOKIE', `(async()=>{ return {repText: document.getElementById('rep').textContent}; })()`],
-  ['respect rank: rep 50 HUSTLER, rep 100 STREET KING', `(async()=>{ const wait=${wait}; const g=window.__pv.game; g.rep=50; await wait(1500); const h=document.getElementById('rep').textContent; g.rep=100; await wait(1500); const s=document.getElementById('rep').textContent; return {hustler:h, king:s}; })()`],
-  ['5 stars: Air One heli spawns + roadblocks + spike strip', `(async()=>{ const wait=${wait}; const g=window.__pv.game; const car=g.parkedCars[0]; g.player.enterCar(car); car.velX=20; car.velZ=0; g.police.setStars(5); await wait(2500); return {stars:g.police.stars, heli:!!g.police.heli, heliActive:g.police.heliActive, blocks:g.police.roadblocks.length, blockCars:g.police.roadblockCars().length, strip:!!g.police.spikeStrip, stripArmed:g.police.spikeStrip&&g.police.spikeStrip.armed}; })()`],
-  ['spike strip bursts tyres on drive-over', `(async()=>{ const wait=${wait}; const g=window.__pv.game; for(const c of g.police.cars){c.x+=500;c.z+=500;} const s=g.police.spikeStrip; s.armed=true; s.cooldown=0; const car=g.player.car; car.x=s.x; car.z=s.z; car.velX=0; car.velZ=0; await wait(2000); return {slowTimer:+car.slowTimer.toFixed(1), hp:Math.round(car.hp), armed:s.armed}; })()`],
-  ['radio: setStation switches HUD label, nextStation cycles', `(async()=>{ const g=window.__pv.game; g.police.clear(); g.audio.setStation(1); const a=document.getElementById('radio').textContent; g.audio.nextStation(); const b=document.getElementById('radio').textContent; g.audio.setStation(0); return {station1:a, station2:b, station:g.audio.station}; })()`],
-  ['weapon wheel: SMG then shotgun, mags tracked, shot spends ammo', `(async()=>{ const g=window.__pv.game; const p=g.player; if(p.car) p.exitCar(); p.selectWeapon('smg'); const smgAmmo=p.ammo; p.selectWeapon('shotgun'); const sgAmmo=p.ammo; const r=p.shoot({x:p.x+10,z:p.z},[]); return {weapon:p.weapon, smgAmmo, sgAmmo, shot:!!r, ammoAfter:p.ammo, wheel:document.getElementById('wheel-shotgun').textContent}; })()`],
-  ['garage: buy Taxi Gold paint, applied to car body', `(async()=>{ const g=window.__pv.game; g.cash=5000; g.rep=120; const car=g.parkedCars[0]; g.player.enterCar(car); car.x=-90; car.z=86; car.velX=0; car.velZ=0; const r=g.upgrades.buyPaint('Taxi Gold', g.cash); if(r.ok) g.cash-=r.cost; g.upgrades.applyTo(car); return {ok:r.ok, cost:r.cost, paint:g.upgrades.paint, bodyHex:'0x'+car.mesh.userData.body.material.color.getHexString(), cash:g.cash}; })()`],
-  ['garage: engine tier 3 locked at rep 0, open at HUSTLER (50)', `(async()=>{ const g=window.__pv.game; g.upgrades.levels.engine=2; const locked=g.upgrades.buy('engine', 9000, 0); g.rep=50; const r=g.upgrades.buy('engine', 9000, g.rep); const car=g.player.car; const base=car._upgBase.maxSpeed; g.upgrades.applyTo(car); return {lockedOk:locked.ok, lockedMsg:locked.msg, ok:r.ok, cost:r.cost, level:g.upgrades.levels.engine, base, tuned:+car.stats.maxSpeed.toFixed(1)}; })()`],
-  ['garage: armour tier 3 locked at HUSTLER, open at STREET KING (100)', `(async()=>{ const g=window.__pv.game; g.upgrades.levels.armor=2; const locked=g.upgrades.buy('armor', 9000, 50); g.rep=100; const r=g.upgrades.buy('armor', 9000, g.rep); const car=g.player.car; const base=car._upgBase.hp; g.upgrades.applyTo(car); return {lockedOk:locked.ok, lockedMsg:locked.msg, ok:r.ok, cost:r.cost, level:g.upgrades.levels.armor, base, tuned:car.stats.hp}; })()`],
-  ['garage: Chrome wheels + spoiler fit and show', `(async()=>{ const g=window.__pv.game; g.cash=9000; g.rep=100; const rw=g.upgrades.buyWheels('Chrome', g.cash, g.rep); if(rw.ok) g.cash-=rw.cost; const rs=g.upgrades.buySpoiler(g.cash, g.rep); if(rs.ok) g.cash-=rs.cost; const car=g.player.car; g.upgrades.applyTo(car); return {wheelsOk:rw.ok, spoilerOk:rs.ok, wheels:g.upgrades.wheels, spoiler:g.upgrades.spoiler, wheelHex:'0x'+car.mesh.userData.wheels[0].material.color.getHexString()}; })()`],
-  ['save/load round-trip keeps garage + weapons + station + cash', `(async()=>{ const wait=${wait}; const g=window.__pv.game; g.cash=4321; g.rep=100; g.player.selectWeapon('smg'); g.audio.setStation(2); g.saveGame(); const raw=JSON.parse(localStorage.getItem('porto-verde-save-v1')); await wait(500); g.startGame(false); await wait(1000); return {savedPaint:raw.upgrades.paint, savedWheels:raw.upgrades.wheels, savedSpoiler:raw.upgrades.spoiler, savedWeapon:raw.weapons.current, savedStation:raw.settings.station, savedCash:raw.cash, loadedPaint:g.upgrades.paint, loadedWeapon:g.player.weapon, loadedStation:g.audio.station, loadedCash:g.cash, continueVisible:document.getElementById('btn-continue').style.display}; })()`],
-];
+try {
+  await cdp.waitFor(`window.__pv && window.__pvTest`, 15000);
+  check('page loads, probe hooks present', true);
 
-async function main() {
-  const server = spawn('node', ['serve.ts', '--port', String(port)], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
-  await sleep(1200);
-  // Preflight: make sure OUR server owns this port. Sibling variant agents
-  // share this VM; if another variant's server already holds the port, our
-  // spawn dies with EADDRINUSE and Chrome would silently load THEIR game
-  // (that exact failure hit port 8151, owned by variant C). Abort loudly.
-  // Retried: under memory pressure the server can be slow to bind.
-  let idx = '';
-  for (let i = 0; i < 10; i++) {
-    idx = await fetch(`http://127.0.0.1:${port}/`).then((r) => r.text()).catch(() => '');
-    if (idx) break;
-    await sleep(1000);
+  const errs = cdp.events.filter((e) =>
+    (e.method === 'Runtime.exceptionThrown') ||
+    (e.method === 'Log.entryAdded' && e.params?.entry?.level === 'error'));
+  check('no page errors on load', errs.length === 0, errs.slice(0, 2).map((e) => JSON.stringify(e.params).slice(0, 200)).join(' | '));
+
+  // --- new game ---
+  await cdp.eval(`__pvTest.newGame()`);
+  await sleep(600);
+  check('new game starts playing', await cdp.eval(`__pv.mode === 'playing'`));
+  check('player on foot at garage', await cdp.eval(`__pv.player.onFoot && Math.abs(__pv.player.x - 1000) < 80 && Math.abs(__pv.player.y - 560) < 80`));
+  check('traffic + peds spawned', await cdp.eval(`__pv.cars.length >= 20 && __pv.peds.length >= 30`), await cdp.eval(`'cars=' + __pv.cars.length + ' peds=' + __pv.peds.length`));
+
+  // --- carjack + drive ---
+  await cdp.eval(`__pv.cars[0].x = __pv.player.x + 40; __pv.cars[0].y = __pv.player.y; __pv.cars[0].speed = 0;`);
+  await cdp.eval(`__pvTest.tryEnterCar()`);
+  check('carjack enters car, wanted +1', await cdp.eval(`!!__pv.car && __pv.wanted === 1`));
+  await cdp.eval(`__pv.input.up = true;`);
+  await sleep(2000);
+  await cdp.eval(`__pv.input.up = false;`);
+  const speed = await cdp.eval(`Math.abs(__pv.car.speed)`);
+  check('car accelerates', speed > 100, `speed=${Math.round(speed)}`);
+  const angleBefore = await cdp.eval(`__pv.car.angle`);
+  await cdp.eval(`__pv.input.left = true;`);
+  await sleep(500);
+  await cdp.eval(`__pv.input.left = false;`);
+  const angleAfter = await cdp.eval(`__pv.car.angle`);
+  check('car steers', angleAfter < angleBefore - 0.15, `angle ${angleBefore.toFixed(2)} -> ${angleAfter.toFixed(2)}`);
+
+  // --- weapons ---
+  await cdp.eval(`__pvTest.switchWeapon(2)`);
+  await cdp.eval(`__pv.mouse.x = 900; __pv.mouse.y = 200; __pvTest.fireWeapon()`);
+  await sleep(200);
+  check('shotgun fires, mag drops, bullet exists', await cdp.eval(`__pv.weapons.mags[2] === 5 && __pv.bullets.length > 0`));
+  await cdp.eval(`__pvTest.reloadWeapon()`);
+  check('reload refills mag from reserve', await cdp.eval(`__pv.weapons.mags[2] === 6 && __pv.weapons.reserve < 60`));
+
+  // --- missions 1-8 ---
+  await cdp.eval(`__pvTest.startMission(0)`);
+  check('mission 1 starts', await cdp.eval(`__pv.mission && __pv.mission.idx === 0`));
+  await cdp.eval(`__pv.car.x = 1000; __pv.car.y = 600; __pv.player.x = 1000; __pv.player.y = 600;`);
+  await sleep(400);
+  check('mission 1 completes at garage (+150, +25 REP)', await cdp.eval(`__pv.cash >= 300 && __pv.rep === 25 && __pv.mission === null`), await cdp.eval(`'cash=' + __pv.cash + ' rep=' + __pv.rep`));
+
+  await cdp.eval(`__pvTest.startMission(1)`);
+  check('mission 2 timer 150s', await cdp.eval(`__pv.mission && __pv.mission.timer > 140`));
+  await cdp.eval(`__pv.player.x = 1200; __pv.player.y = 1560; if (__pv.car) { __pv.car.x = 1200; __pv.car.y = 1560; }`);
+  await sleep(400);
+  check('mission 2 completes at beach', await cdp.eval(`__pv.rep === 50 && __pv.mission === null`));
+
+  await cdp.eval(`__pvTest.startMission(2)`);
+  check('mission 3 spawns the Comet', await cdp.eval(`__pv.mission.extra.comet && !__pv.mission.extra.comet.dead`));
+  await cdp.eval(`__pvTest.exitCar(); __pv.player.x = __pv.mission.extra.comet.x + 30; __pv.player.y = __pv.mission.extra.comet.y; __pvTest.tryEnterCar()`);
+  await sleep(300);
+  check('stealing Comet raises wanted to 2', await cdp.eval(`__pv.car === __pv.mission.extra.comet && __pv.wanted >= 2`), `wanted=${await cdp.eval(`__pv.wanted`)}`);
+  await cdp.eval(`__pv.car.x = 1000; __pv.car.y = 600; __pv.player.x = 1000; __pv.player.y = 600;`);
+  await sleep(400);
+  check('mission 3 completes at garage', await cdp.eval(`__pv.rep === 75 && __pv.mission === null`));
+
+  await cdp.eval(`__pvTest.startMission(3)`);
+  check('mission 4 spawns Rico sedan', await cdp.eval(`!!__pv.mission.extra.sedan`));
+  // Chase the fleeing sedan down: steer at it with the throttle held, up to 8s.
+  await cdp.eval(`__pv.input.up = true;`);
+  let rammed = false;
+  for (let i = 0; i < 80; i++) {
+    const done = await cdp.eval(`__pv.mission === null && __pv.rep === 100`);
+    if (done) { rammed = true; break; }
+    await cdp.eval(`(() => { const s = __pv.mission ? __pv.mission.extra.sedan : null; if (!s || !__pv.car) return; __pv.car.angle = Math.atan2(s.y - __pv.car.y, s.x - __pv.car.x); __pv.car.x = s.x - Math.cos(__pv.car.angle) * 60; __pv.car.y = s.y - Math.sin(__pv.car.angle) * 60; __pv.car.speed = 280; })()`);
+    await sleep(100);
   }
-  if (!idx.includes('weapon-wheel') || !idx.includes('CROSS MOTORS')) {
-    console.error('PREFLIGHT FAIL: port ' + port + ' is not serving variant B (wrong server or bind failed).');
-    server.kill('SIGKILL');
-    process.exit(2);
-  }
-  const chrome = spawn(CHROME, [
-    '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
-    '--remote-debugging-pipe', '--window-size=1280,800',
-    '--enable-unsafe-swiftshader',
-    `--user-data-dir=${PROFILE}`,
-    `--hatch-webgl-allowed-domains-file=${POLICY_FILE}`,
-    `--hatch-webgl-allowed-domains-sha256=${POLICY_SHA}`,
-    '--no-proxy-server', '--mute-audio', 'about:blank',
-  ], { stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] });
-  const cdp = new PipeCDP(chrome);
-  await sleep(1500);
-  const gameUrl = `http://127.0.0.1:${port}/?autostart=1&scale=1`;
-  const tgt = await cdp.send('Target.createTarget', { url: `file://${PROBE}?u=${encodeURIComponent(gameUrl)}` });
-  const att = await cdp.send('Target.attachToTarget', { targetId: tgt.targetId, flatten: true });
-  const sid = att.sessionId;
-  await cdp.send('Page.enable', {}, sid);
-  await cdp.send('Runtime.enable', {}, sid);
-  await sleep(6000);
-  const ready = await cdp.eval(`window.__pv && window.__pv.ready && window.__pv.errors.length===0 ? 'READY' : JSON.stringify(window.__pv)`, sid);
-  console.log('boot:', ready);
-  let fail = 0;
-  for (const [name, expr] of CHECKS) {
-    const out = await cdp.eval(expr, sid);
-    await sleep(300);
-    // Per-check assertions beyond "no exception".
-    let bad = !out || out.error;
-    if (!bad) {
-      if (name.startsWith('pause menu') && out.buttons !== 8) bad = true;
-      if (name.startsWith('respect rank: REP 0') && !/ROOKIE/.test(out.repText || '')) bad = true;
-      if (name.startsWith('respect rank: rep 50') && (!/HUSTLER/.test(out.hustler || '') || !/STREET KING/.test(out.king || ''))) bad = true;
-      if (name.startsWith('5 stars') && (!out.heli || !out.heliActive || out.blocks < 2 || out.blockCars < 4 || !out.strip || !out.stripArmed)) bad = true;
-      if (name.startsWith('spike strip bursts') && !(out.slowTimer > 0)) bad = true;
-      if (name.startsWith('radio:') && (!/PLAYA 104/.test(out.station1 || '') || !/DOCK RADIO/.test(out.station2 || ''))) bad = true;
-      if (name.startsWith('weapon wheel') && !(out.weapon === 'shotgun' && out.smgAmmo === 30 && out.sgAmmo === 6 && out.shot && out.ammoAfter === 5)) bad = true;
-      if (name.startsWith('garage: buy Taxi') && !(out.ok && out.paint === 'Taxi Gold' && out.bodyHex === '0xf1c40f')) bad = true;
-      if (name.startsWith('garage: engine tier 3') && !(out.lockedOk === false && /HUSTLER/.test(out.lockedMsg || '') && out.ok && out.cost === 2500 && out.level === 3 && Math.abs(out.tuned - out.base * 1.45) < 0.2)) bad = true;
-      if (name.startsWith('garage: armour tier 3') && !(out.lockedOk === false && /STREET KING/.test(out.lockedMsg || '') && out.ok && out.cost === 2200 && out.level === 3 && out.tuned === out.base + 150)) bad = true;
-      if (name.startsWith('garage: Chrome') && !(out.wheelsOk && out.spoilerOk && out.wheels === 'Chrome' && out.spoiler === true && out.wheelHex === '0xd8d8d8')) bad = true;
-      if (name.startsWith('save/load') && !(out.savedPaint === 'Taxi Gold' && out.savedWheels === 'Chrome' && out.savedSpoiler === true && out.savedWeapon === 'smg' && out.savedStation === 2 && out.savedCash === 4321 && out.loadedPaint === 'Taxi Gold' && out.loadedWeapon === 'smg' && out.loadedStation === 2 && out.loadedCash === 4321)) bad = true;
+  await cdp.eval(`__pv.input.up = false;`);
+  check('ramming wrecks the sedan, mission 4 completes', rammed, `rep=${await cdp.eval(`__pv.rep`)}`);
+
+  await cdp.eval(`__pvTest.startMission(4)`);
+  await cdp.eval(`__pv.player.x = 200; __pv.player.y = 200; if (__pv.car) { __pv.car.x = 200; __pv.car.y = 200; }`);
+  await sleep(400);
+  await cdp.eval(`__pv.player.x = 2200; __pv.player.y = 600; if (__pv.car) { __pv.car.x = 2200; __pv.car.y = 600; }`);
+  await sleep(400);
+  await cdp.eval(`__pv.player.x = 600; __pv.player.y = 1400; if (__pv.car) { __pv.car.x = 600; __pv.car.y = 1400; }`);
+  await sleep(400);
+  check('mission 5 completes after 3 drops', await cdp.eval(`__pv.mission === null && __pv.rep === 125`));
+
+  await cdp.eval(`__pvTest.startMission(5)`);
+  await sleep(600);
+  check('mission 6 sets 4 stars + roadblocks', await cdp.eval(`__pv.wanted === 4 && __pv.roadblocks.length >= 1`), `rb=${await cdp.eval(`__pv.roadblocks.length`)}`);
+  await cdp.eval(`__pv.player.x = 200; __pv.player.y = 200; if (__pv.car) { __pv.car.x = 200; __pv.car.y = 200; }`);
+  await sleep(400);
+  check('mission 6 completes at hideout', await cdp.eval(`__pv.mission === null && __pv.rep === 150`));
+
+  await cdp.eval(`__pvTest.startMission(6)`);
+  check('mission 7 spawns 3 guards + van', await cdp.eval(`__pv.mission.extra.guards.length === 3`));
+  // Stand beside the guards (clear of the van) so the pistol reaches them,
+  // and pin the camera so the aim point does not drift while it settles.
+  await cdp.eval(`__pv.player.x = 1700; __pv.player.y = 960; if (__pv.car) { __pv.car.x = 1700; __pv.car.y = 960; __pv.car.speed = 0; } __pv.camera.x = 1700; __pv.camera.y = 960;`);
+  await sleep(300);
+  // Shoot the guards: re-aim before every shot and fire until each one is gone.
+  for (let gi = 0; gi < 3; gi++) {
+    for (let s = 0; s < 14; s++) {
+      const gone = await cdp.eval(`!__pv.mission || !__pv.mission.extra.guards[${gi}] || __pv.mission.extra.guards[${gi}].hp <= 0 || !__pv.peds.includes(__pv.mission.extra.guards[${gi}])`);
+      if (gone) break;
+      await cdp.eval(`(() => { const gp = __pv.mission.extra.guards[${gi}]; if (!gp || gp.hp <= 0) return; __pv.mouse.x = gp.x - __pv.camera.x + 640; __pv.mouse.y = gp.y - __pv.camera.y + 400; __pvTest.switchWeapon(0); __pvTest.fireWeapon(); })()`);
+      await sleep(260);
     }
-    console.log((bad ? 'FAIL' : 'PASS') + ' | ' + name + ' => ' + JSON.stringify(out));
-    if (bad) fail++;
   }
-  chrome.kill('SIGKILL'); server.kill('SIGKILL');
-  process.exit(fail ? 1 : 0);
+  await sleep(400);
+  check('guards shot down, vault cash appears', await cdp.eval(`__pv.mission && __pv.mission.extra.cash && __pv.pickups.includes(__pv.mission.extra.cash)`));
+  await cdp.eval(`__pv.mission.extra.cash.x = __pv.player.x; __pv.mission.extra.cash.y = __pv.player.y;`);
+  await sleep(400);
+  check('vault cash picked up', await cdp.eval(`__pv.mission.extra.cash.taken === true`));
+  await cdp.eval(`__pv.player.x = 1000; __pv.player.y = 600; if (__pv.car) { __pv.car.x = 1000; __pv.car.y = 600; }`);
+  await sleep(400);
+  check('mission 7 completes at garage', await cdp.eval(`__pv.mission === null && __pv.rep === 175`));
+
+  await cdp.eval(`__pvTest.startMission(7)`);
+  await sleep(800);
+  check('mission 8 sets 5 stars + Air One', await cdp.eval(`__pv.wanted === 5 && !!__pv.heli`), `heli=${await cdp.eval(`!!__pv.heli`)}`);
+  await cdp.eval(`__pv.stripTimer = 0;`);
+  await sleep(600);
+  check('spike strip armed at 5 stars', await cdp.eval(`__pv.strips.length >= 1 && __pv.strips[0].armed`));
+  await cdp.eval(`const s = __pv.strips[0]; __pv.car.x = s.x; __pv.car.y = s.y; __pv.player.x = s.x; __pv.player.y = s.y;`);
+  await sleep(300);
+  check('spike strip slows the car', await cdp.eval(`__pv.car.slowTimer > 0`), `slow=${await cdp.eval(`__pv.car.slowTimer`)}`);
+  await cdp.eval(`__pv.player.x = 2250; __pv.player.y = 1560; if (__pv.car) { __pv.car.x = 2250; __pv.car.y = 1560; }`);
+  await sleep(400);
+  check('mission 8 completes, STREET KING, wanted cleared', await cdp.eval(`__pv.mission === null && __pv.rep === 200 && __pv.wanted === 0`), `rep=${await cdp.eval(`__pv.rep`)}`);
+
+  // --- garage shop ---
+  await cdp.eval(`__pv.cash = 5000; __pv.player.x = 1000; __pv.player.y = 600;`);
+  await cdp.eval(`__pvTest.openShop()`);
+  await sleep(300);
+  check('garage opens with items', await cdp.eval(`__pv.mode === 'garage' && document.querySelectorAll('#shop-items .shop-item').length >= 10`), await cdp.eval(`'items=' + document.querySelectorAll('#shop-items .shop-item').length`));
+  await cdp.eval(`[...document.querySelectorAll('#shop-items .shop-item')].find(el => el.textContent.includes('Engine · Stage 2')).click()`);
+  await sleep(300);
+  check('engine stage 2 bought', await cdp.eval(`__pv.garage.engine === 2 && __pv.cash === 4200`));
+  await cdp.eval(`__pvTest.closeShop()`);
+  check('garage closes', await cdp.eval(`__pv.mode === 'playing'`));
+
+  // --- save / load ---
+  await cdp.eval(`__pvTest.saveGame()`);
+  check('save writes localStorage', await cdp.eval(`!!localStorage.getItem('portoVerdeSaveV1')`));
+  const saved = await cdp.eval(`JSON.parse(localStorage.getItem('portoVerdeSaveV1'))`);
+  check('save holds cash/rep/missions', saved && saved.cash === 4200 && saved.rep === 200 && saved.missionsDone.length === 8, JSON.stringify(saved).slice(0, 160));
+
+  // --- wanted decay ---
+  await cdp.eval(`__pv.wanted = 1; __pv.cops = []; __pv.heli = null; __pv.hiddenTimer = 11.5;`);
+  await sleep(1200);
+  check('hiding sheds a star after 12s', await cdp.eval(`__pv.wanted === 0`), `wanted=${await cdp.eval(`__pv.wanted`)}`);
+
+  // --- busted ---
+  await cdp.eval(`__pv.wanted = 2; __pv.cops = []; const cop = { x: __pv.player.x + 30, y: __pv.player.y, angle: 0, speed: 0, color: '#1c2733', kind: 'cop', hp: 120, maxHp: 120, isPlayer: false, isCop: true, driver: true, top: 380, accel: 380, cruise: 150, wp: null, wait: 0, dead: false, smoke: 0, paint: 0, wheels: 0, spoiler: false, slowTimer: 0 }; __pv.cops.push(cop); if (__pv.car) __pv.car.speed = 0;`);
+  await sleep(3200);
+  check('busted after 2.5s next to a cop', await cdp.eval(`__pv.mode === 'busted'`), `mode=${await cdp.eval(`__pv.mode`)}`);
+  await cdp.eval(`__pvTest.respawn()`);
+  check('retry respawns at garage', await cdp.eval(`__pv.mode === 'playing' && __pv.player.hp === 100 && __pv.wanted === 0`));
+
+  // --- radio ---
+  await cdp.eval(`__pvTest.newGame()`);
+  const audioOk = await cdp.eval(`__pv.audio.ok`);
+  await cdp.eval(`__pv.audio.setStation(1)`);
+  check('radio station switches', await cdp.eval(`__pv.audio.station === 1`), `audioCtxOk=${audioOk}`);
+
+  // --- render sanity: canvas not blank ---
+  const px = await cdp.eval(`(() => { const c = document.getElementById('game'); const x = c.getContext('2d'); const d = x.getImageData(0, 0, 1280, 800).data; let sum = 0; for (let i = 0; i < d.length; i += 401) sum += d[i]; return sum; })()`);
+  check('canvas renders non-blank pixels', px > 100000, `sampleSum=${px}`);
+} catch (e) {
+  console.log('PROBE ERROR: ' + e.message);
+  results.push({ name: 'probe crashed', ok: false, detail: e.message });
+} finally {
+  const fails = results.filter((r) => !r.ok);
+  console.log(`\n== ${results.length - fails.length}/${results.length} checks passed ==`);
+  cdp.close();
+  chrome.kill();
+  server.close();
+  process.exit(fails.length ? 1 : 0);
 }
-main().catch((e) => { console.error('PROBE FAIL:', e.message); process.exit(1); });
